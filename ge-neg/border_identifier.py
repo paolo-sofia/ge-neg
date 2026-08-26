@@ -1,15 +1,13 @@
-import os
-
 import numpy as np
-import pygad
 
 
 class DynamicEdgeDetector:
     def __init__(
         self,
-        z_threshold: float = 3.0,
+        mad_threshold: float = 3.0,
         min_abs_delta: float = 1.0,
-        min_std: float = 0.15,
+        min_mad: float = 0.15,
+        verbose: bool = False,
     ):
         """z_threshold: quanti sigma sopra la media indicano un outlier.
 
@@ -17,32 +15,57 @@ class DynamicEdgeDetector:
         bordo (evita falsi positivi su fluttuazioni microscopiche). min_std: std
         minima per le prime slice dove la varianza è zero.
         """
-        self.z_threshold = z_threshold
+        self.mad_threshold = mad_threshold
         self.min_abs_delta = min_abs_delta
-        self.min_std = min_std
+        self.min_mad = min_mad
         self.history = []
+        self.verbose = verbose
+
+    def _calculate_mad(self, data: np.ndarray, median: float) -> float:
+        """Calcola la Median Absolute Deviation (MAD), alternativa robusta alla
+        Std."""
+        return float(np.median(np.abs(data - median)))
 
     def process_slice(self, current_entropy: float) -> bool:
+        # 1. GESTIONE LIGHT LEAK INIZIALE:
+        # Se la storia ha valori alti e la slice attuale STA SCENDENDO,
+        # significa che il valore precedente era un light leak. Lo ripuliamo.
+        if self.history and current_entropy < self.history[-1]:
+            # Se la prima slice era un picco isolato (es. 19.99), la sostituiamo
+            if len(self.history) == 1 or self.history[0] > current_entropy + 2.0:
+                # print(
+                #     f"   [Light Leak Detected] Pulizia valore anomalo iniziale: {self.history[0]:.4f} -> {current_entropy:.4f}"
+                # )
+                self.history.clear()
+                self.history.append(current_entropy)
+                return False
+
         # Caso 1: Primo elemento in assoluto. Non possiamo fare confronti.
+
+        if self.verbose:
+            print(f"history: {self.history}")
         if not self.history:
             self.history.append(current_entropy)
             return False
 
-        # 1. Calcolo Statistica Dinamica sugli elementi finora accumulati
-        mean = np.mean(self.history)
+        hist_array = np.array(self.history)
+        median = float(np.median(hist_array))
+        mad = max(self._calculate_mad(hist_array, median), self.min_mad)
 
-        # Se abbiamo solo 1 elemento, std è 0, quindi usiamo il min_std di sicurezza
-        calc_std = np.std(self.history) if len(self.history) > 1 else 0.0
-        std = max(calc_std, self.min_std)
-
-        # 2. Soglia dinamica (media + Z * std)
-        dynamic_threshold = mean + (self.z_threshold * std)
+        # Usiamo il fattore 1.4826 per rendere la MAD equivalente alla Deviazione Standard
+        robust_std = mad * 1.4826
+        dynamic_threshold = median + (self.mad_threshold * robust_std)
 
         # 3. Calcolo della derivata/delta rispetto al valore precedente
         delta = current_entropy - self.history[-1]
 
         # 4. CONDIZIONE DI BORDO:
         # Il valore supera la soglia dinamica AND il salto è significativo (evita rumore)
+        if self.verbose:
+            print(f"mean: {mad} - std: {robust_std}")
+            print(
+                f"current_entropy: {current_entropy} > dynamic_threshold: {dynamic_threshold} and delta: {delta} > min_abs_delta {self.min_abs_delta}"
+            )
         if current_entropy > dynamic_threshold and delta > self.min_abs_delta:
             # print(
             #     f"[MODULE 1] - BORDO RILEVATO ALLA SLICE #{len(self.history) + 1}! ({current_entropy:.4f} > {dynamic_threshold:.4f})"
@@ -121,13 +144,13 @@ class BorderIdentifier:
         previous_entropies: list[float] = []
 
         i: int = 1
-        num_plateau_iterations: int = 0
         new_direction_value: int = 0
         old_direction_value: int = self.borders[direction]
         is_last_iteration = False
 
-        edge_detector = DynamicEdgeDetector()
+        edge_detector = DynamicEdgeDetector()  # verbose=direction == "bottom"
 
+        image: np.ndarray
         while True:
             if direction == "left":
                 new_direction_value = self.borders[direction] + (self.step_x * i)

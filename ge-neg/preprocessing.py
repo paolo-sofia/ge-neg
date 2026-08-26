@@ -1,10 +1,7 @@
 import pathlib
-from turtle import left
 
 import cv2
 import numpy as np
-from numpy._typing import _16Bit
-from numpy.testing._private.utils import break_cycles
 
 
 def load_and_normalize(

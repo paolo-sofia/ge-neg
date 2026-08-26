@@ -1,9 +1,9 @@
+import argparse
 import pathlib
 from time import time
 
 import cv2
 import numpy as np
-import tifffile as tiff
 from border_identifier import BorderIdentifier
 from contrast_booster import ContrastBoosterGenetic, apply_s_curve
 from preprocessing import expose_to_the_right, load_and_normalize, remove_scanner_light
@@ -134,7 +134,7 @@ def full_process(input_path: pathlib.Path, output_path: pathlib.Path) -> None:
     trimmed_image = remove_scanner_light(img)
     save_to_file(trimmed_image, output_path, "scanner_crop")
 
-    print(f"[MODULO 0] - Compensazione dell'esposizione con ETTR")
+    print(f"[MODULO 1] - Compensazione dell'esposizione con ETTR")
     ettr = expose_to_the_right(trimmed_image)
     save_to_file(ettr, output_path, "exposure_compensation")
 
@@ -161,13 +161,19 @@ def full_process(input_path: pathlib.Path, output_path: pathlib.Path) -> None:
     print("[MODULO 4] - Miglioramento del contrasto")
     contrast_booster = ContrastBoosterGenetic(img_scene_wb)
     contrast_booster.run()
+    x0, k, h = contrast_booster.genetic_optimizer.best_solution()[0]
+    print(
+        f"[MODULO 4] - Parametri migliori per curva di contrasto: x0 = {x0} - k = {k} - h = {h}"
+    )
     contrasted_image = apply_s_curve(
-        positive_img, *contrast_booster.genetic_optimizer.best_solution()[0]
+        img_scene_wb, *contrast_booster.genetic_optimizer.best_solution()[0]
     )
     save_to_file(contrasted_image, output_path, "contrast_booster")
 
 
-def main() -> None:
+def main(
+    image_type_to_process: str = "", image_description_to_process: str = ""
+) -> None:
     input_path = pathlib.Path("/home/paolo/git/ge-neg/tests/input_images/")
     output_folder = pathlib.Path("/home/paolo/git/ge-neg/tests/output_images/")
 
@@ -179,15 +185,41 @@ def main() -> None:
 
         image_type: str = path.parents[0].stem
         image_description: str = path.stem
+
+        if image_type_to_process and image_type != image_type_to_process:
+            continue
+
+        if (
+            image_description_to_process
+            and image_description != image_description_to_process
+        ):
+            continue
+
         output_path = output_folder / image_type / image_description
         output_path.mkdir(parents=True, exist_ok=True)
 
         try:
-            print(f"Processing image {image_type} - {image_description}")
+            print(
+                f" ============================== Processing image {image_type} - {image_description} =============================="
+            )
+            start_time = time()
             full_process(path, output_path)
-            print(f"Image {path.stem} processed")
+            elapsed = time() - start_time
+
+            print(
+                f"Image {path.stem} processed in {(elapsed // 60)}:{int(elapsed % 60)} minutes"
+            )
         except Exception as e:
             print(e)
 
 
-main()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        prog="ge-neg",
+        description="Processa automaticamente i negativi",
+    )
+    _ = parser.add_argument("-t", "--type")
+    _ = parser.add_argument("-d", "--description")
+
+    args = parser.parse_args()
+    main(args.type, args.description)

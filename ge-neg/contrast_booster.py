@@ -31,9 +31,16 @@ def apply_s_curve(img: np.ndarray, x0: float, k: float, h: float) -> np.ndarray:
     - k: Pendenza/Contrasto nei toni medi (1.0 - 5.0)
     - h: Compressione/Spalla delle luci (0.7 - 1.3)
     """
+    R = img[:, :, 0]
+    G = img[:, :, 1]
+    B = img[:, :, 2]
+
+    # 1. Calcola la Luminanza sRGB
+    Y_orig = 0.2126 * R + 0.7152 * G + 0.0722 * B
+
     # print(f"Apply s curve with param: x0:{x0} - k:{k} - h:{h}")
     # Formula sigmoidale modificata per il controllo dinamico della spalla
-    s_shaped: np.ndarray = 1.0 / (1.0 + np.exp(-k * (img - x0)))
+    s_shaped: np.ndarray = 1.0 / (1.0 + np.exp(-k * (Y_orig - x0)))
     # print(f"s_shaped: {s_shaped.shape}")
 
     # Normalizzazione per garantire che la curva mappi esattamente [0, 1] -> [0, 1]
@@ -44,12 +51,17 @@ def apply_s_curve(img: np.ndarray, x0: float, k: float, h: float) -> np.ndarray:
     normalized: np.ndarray = (s_shaped - y_min) / (y_max - y_min + 1e-6)
     # print(f"normalized; {normalized.shape}")
 
-    # Modulazione spalla/luci
-    out: np.ndarray = np.power(np.clip(normalized, 1e-6, 1.0), h)
-    # print(f"out; {out.shape}")
-    clipped_output = np.clip(out, 0.0, 1.0)
-    # print("s curve applied")
-    return clipped_output
+    # Luminanza trasformata dalla curva
+    Y_boosted = np.power(np.clip(normalized, 1e-6, 1.0), h)
+    Y_boosted = np.clip(Y_boosted, 0.0, 1.0)
+
+    # 3. Fattore di scala proporzionale (2D)
+    scale = np.where(Y_orig > 1e-6, Y_boosted / Y_orig, 1.0)
+
+    # 4. Applicazione del guadagno ai canali RGB e ricomposizione
+    img_out = np.dstack([R * scale, G * scale, B * scale])
+
+    return np.clip(img_out, 0.0, 1.0)
 
 
 class ContrastBoosterGenetic:
@@ -65,9 +77,9 @@ class ContrastBoosterGenetic:
         self.img: np.ndarray = downsample_for_optimizer(img)
         self.alpha: float = alpha
         self.bounds: list[list[float]] = [
-            [0.35, 0.55],  # x0
-            [1.2, 4.0],  # k
-            [0.8, 1.2],  # h
+            [0.3, 0.6],  # x0
+            [1.0, 8.0],  # k
+            [0.7, 1.3],  # h
         ]
 
         self.population: np.ndarray = self._initialize_population(population_size)
@@ -117,18 +129,27 @@ class ContrastBoosterGenetic:
         """Calcola la fitness: massimizza la Deviazione Standard e penalizza il Clipping."""
         # 1. Obiettivo principale: Massimizzare il contrasto (Deviazione Standard)
         # print(f"solution: {solution}")
-        image = apply_s_curve(self.img, *solution)
+        x0, k, h = solution
+        image = apply_s_curve(self.img, x0, k, h)
         # print("s curve applied")
         sigma = np.std(image)
-        # print("sigma computed")
 
-        # 2. Penalità per Clipping (Pixel bruciati nelle ombre o nelle luci)
-        shadow_clipping = np.mean(image < 0.01)
-        # print("shadow_clipping computed")
-        highlight_clipping = np.mean(image > 0.99)
-        # print("highlight_clipping computed")
+        # 3. Penalità relativa per Clipping (Confronto con l'immagine originale)
+        # Penalizziamo solo se AUMENTIAMO i pixel bruciati rispetto al file di partenza
+        orig_shadows = np.mean(self.img < 0.01)
+        new_shadows = np.mean(image < 0.01)
+        shadow_penalty = max(0.0, new_shadows - orig_shadows)
 
-        # Pesi per le penalità
-        penalty = 3.0 * (shadow_clipping + highlight_clipping)
-        # print(f"solution: {solution} --> sigma: {sigma} - penalty: {penalty}")
-        return float(sigma - penalty)
+        orig_highlights = np.mean(self.img > 0.99)
+        new_highlights = np.mean(image > 0.99)
+        highlight_penalty = max(0.0, new_highlights - orig_highlights)
+
+        clipping_penalty = 50.0 * (shadow_penalty + highlight_penalty)
+
+        # 4. Invece di penalizzare k alto, premiamo il delta di contrasto rispetto all'originale
+        # Evita che il GA scelga k=1.0 (che lascia o appiattisce il contrasto)
+        delta_sigma = sigma - np.std(self.img)
+
+        fitness_value = delta_sigma - clipping_penalty
+
+        return float(fitness_value)

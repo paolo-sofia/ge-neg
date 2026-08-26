@@ -54,7 +54,7 @@ def downsample_for_optimizer(
 
 def inversion_and_density_balance(
     transmittance_balanced: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """MODULO 3: Conversione in densità logaritmica, calcolo Density Balance e Inversione.
 
     - transmittance_balanced: Array Float32/Float64 [0.0, 1.0] dal Modulo 2
@@ -83,7 +83,7 @@ def inversion_and_density_balance(
 
     positive_img = (balanced_density - d_min) / (d_max - d_min + 1e-6)
 
-    return positive_img, best_gammas
+    return positive_img
 
 
 def scene_wb(transmittance: np.ndarray, sat_threshold: float = 0.15) -> np.ndarray:
@@ -94,9 +94,6 @@ def scene_wb(transmittance: np.ndarray, sat_threshold: float = 0.15) -> np.ndarr
     # 1. Conversione temporanea in HSV per misurare la saturazione
     hsv = cv2.cvtColor(transmittance, cv2.COLOR_RGB2HSV_FULL)
     saturation = hsv[:, :, 1]
-    print(
-        f"saturation -> shape: {saturation.shape} - min: {saturation.min()} - max: {saturation.max()} - mean: {saturation.mean()} "
-    )
 
     # 2. Maschera dei pixel cromaticamente neutri
     neutral_mask = saturation < sat_threshold
@@ -107,87 +104,90 @@ def scene_wb(transmittance: np.ndarray, sat_threshold: float = 0.15) -> np.ndarr
 
     # 3. Calcolo del valore medio nei 3 canali sui soli pixel neutri
     neutral_pixels = transmittance[neutral_mask]
-    print(
-        f"neutral_pixels -> shape: {neutral_pixels.shape} - min: {neutral_pixels.min()} - max: {neutral_pixels.max()} - mean: {neutral_pixels.mean()} "
-    )
+
     channel_means = np.mean(neutral_pixels, axis=0)
-    print(
-        f"channel_means -> shape: {channel_means.shape} - min: {channel_means.min()} - max: {channel_means.max()} - mean: {channel_means.mean()} "
-    )
 
     # 4. Normalizzazione rispetto al verde (G è il canale di riferimento di luminanza)
     wb_factors = channel_means[1] / np.clip(channel_means, 1e-6, 1.0)
 
-    print(
-        f"transmittance - min: {transmittance.min()} - max: {transmittance.max()} - mean: {transmittance.mean()}"
-    )
-    print(f"wb_factors - {wb_factors}")
-
     # 5. Applicazione del bilanciamento e clipping
     balanced = transmittance * wb_factors
-    print(
-        f"balanced - min: {balanced.min()} - max: {balanced.max()} - mean: {balanced.mean()}"
-    )
+
     return np.clip(balanced, 1e-6, 1.0)
 
 
-def save_to_file(
-    img: np.ndarray, image_type: str, image_description: str, suffix: str
-) -> bool:
+def save_to_file(img: np.ndarray, output_path: pathlib.Path, suffix: str) -> bool:
 
     img_clip = np.clip(img, 0.0, 1.0)
     img_16bit = (img_clip * 65535.0).astype(np.uint16)
     return cv2.imwrite(
-        f"/home/paolo/git/ge-neg/tests/output_images/{image_type}/{image_description}_{suffix}.tiff",
+        output_path / f"{suffix}.tiff",
         cv2.cvtColor(img_16bit, cv2.COLOR_RGB2BGR),
     )
 
 
-image_type = "bianco_nero"  # colori bianco_nero
-image_description = "correttamente_esposta"
+def full_process(input_path: pathlib.Path, output_path: pathlib.Path) -> None:
+    print(f"[MODULO 0] - Caricamento e normalizzazione immagine")
+    img = load_and_normalize(input_path)
 
-path = pathlib.Path(
-    f"/home/paolo/git/ge-neg/tests/input_images/{image_type}/{image_description}.tif"
-)
+    print(f"[MODULO 0] - Rimozione luce scanner")
+    trimmed_image = remove_scanner_light(img)
+    save_to_file(trimmed_image, output_path, "scanner_crop")
 
-img = load_and_normalize(path)
+    print(f"[MODULO 0] - Compensazione dell'esposizione con ETTR")
+    ettr = expose_to_the_right(trimmed_image)
+    save_to_file(ettr, output_path, "exposure_compensation")
 
-print(f"img.shape: {img.shape}")
+    border_identifier = BorderIdentifier(img=ettr)
+    border_identifier.find_borders()
+    photo_pixels = border_identifier.get_image()
 
-trimmed_image = remove_scanner_light(img)
-save_to_file(trimmed_image, image_type, image_description, "scanner_crop")
+    save_to_file(photo_pixels, output_path, "tagliata")
 
-ettr = expose_to_the_right(trimmed_image)
-save_to_file(ettr, image_type, image_description, "exposure_compensation")
+    print("[MODULO 2] - Bilanciamento del bianco")
+    image_wb = film_base_wb(
+        photo_pixels, film_base_color=border_identifier.get_film_base()
+    )
+    save_to_file(image_wb, output_path, "wb")
+
+    print("[MODULO 3] - Inversione in positivo e bilanciamento della densità")
+    positive_img = inversion_and_density_balance(image_wb)
+    save_to_file(positive_img, output_path, "positive")
+
+    print("[MODULO 3] - Bilanciamento del bianco della scena")
+    img_scene_wb = scene_wb(positive_img)
+    save_to_file(img_scene_wb, output_path, "wb_scena")
+
+    print("[MODULO 4] - Miglioramento del contrasto")
+    contrast_booster = ContrastBoosterGenetic(img_scene_wb)
+    contrast_booster.run()
+    contrasted_image = apply_s_curve(
+        positive_img, *contrast_booster.genetic_optimizer.best_solution()[0]
+    )
+    save_to_file(contrasted_image, output_path, "contrast_booster")
 
 
-border_identifier = BorderIdentifier(img=ettr)
-border_identifier.find_borders()
-photo_pixels = border_identifier.get_image()
-borders = border_identifier.get_borders()
+def main() -> None:
+    input_path = pathlib.Path("/home/paolo/git/ge-neg/tests/input_images/")
+    output_folder = pathlib.Path("/home/paolo/git/ge-neg/tests/output_images/")
 
-print(
-    f"photo_pixels shape: {photo_pixels.shape} - Area ratio: {border_identifier.get_area_ratio()}"
-)
-print(f"borders shape: {borders.shape}")
-print(f"film base is: {border_identifier.get_film_base()}")
-save_to_file(photo_pixels, image_type, image_description, "tagliata")
+    VALID_EXTENSIONS = [".tiff", ".tif"]
+    paths = input_path.rglob("**")
+    for path in paths:
+        if not path.is_file() or path.suffix.lower() not in VALID_EXTENSIONS:
+            continue
 
-image_wb = film_base_wb(photo_pixels, film_base_color=border_identifier.get_film_base())
-print(
-    f"image_wb min: {image_wb.min()} - max: {image_wb.max()} - mean: {image_wb.mean()}"
-)
-save_to_file(image_wb, image_type, image_description, "wb")
+        image_type: str = path.parents[0].stem
+        image_description: str = path.stem
+        output_path = output_folder / image_type / image_description
+        output_path.mkdir(parents=True, exist_ok=True)
 
-positive_img, best_gammas = inversion_and_density_balance(image_wb)
-save_to_file(positive_img, image_type, image_description, "positive")
+        try:
+            print(f"Processing image {image_type} - {image_description}")
+            full_process(path, output_path)
+            print(f"Image {path.stem} processed")
+        except Exception as e:
+            print(e)
 
-img_scene_wb = scene_wb(positive_img)
-save_to_file(img_scene_wb, image_type, image_description, "wb_scena")
 
-contrast_booster = ContrastBoosterGenetic(img_scene_wb)
-contrast_booster.run()
-contrasted_image = apply_s_curve(
-    positive_img, *contrast_booster.genetic_optimizer.best_solution()[0]
-)
-save_to_file(contrasted_image, image_type, image_description, "contrast_booster")
+main()

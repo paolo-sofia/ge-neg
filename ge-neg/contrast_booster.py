@@ -86,7 +86,7 @@ class ContrastBoosterGenetic:
             gene_space=self.bounds,
             parent_selection_type="tournament",
             mutation_probability=self.mutation_rate,
-            on_generation=self._on_gen,
+            # on_generation=self._on_gen,
             parallel_processing=["thread", os.cpu_count()],
             stop_criteria="saturate_10",
         )
@@ -101,11 +101,11 @@ class ContrastBoosterGenetic:
         print("Fitness of the best solution :", ga_instance.best_solution()[1])
 
     def run(self) -> None:
-        print(f"✓ [MODULO 4] - Inizializzazione algoritmo genetico")
+        print(f"[MODULO 4] - Inizializzazione algoritmo genetico per aumento contrasto")
         self.genetic_optimizer = self._initialize_genetic_optimizer()
-        print(f"✓ [MODULO 4] - Esecuzione algoritmo genetico")
+        print(f"[MODULO 4] - Esecuzione algoritmo genetico")
         self.genetic_optimizer.run()
-        print(f"✓ [MODULO 4] - Algoritmo genetico eseguito")
+        print(f"[MODULO 4] - Algoritmo genetico eseguito")
 
     def _get_image(self) -> np.ndarray: ...
 

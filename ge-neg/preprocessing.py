@@ -26,19 +26,19 @@ def load_and_normalize(
 
     # Scala in base alla profondità di bit del file
     if img.dtype == np.uint16:
-        print("File è scansione a 16 bit")
+        print("[MODULO 0] - File è scansione a 16 bit")
         img_float = img.astype(np.float32) / 65535.0
         # Di default, un TIFF a 16-bit da VueScan viene trattato come Lineare
         is_linear_raw = True
     else:
-        print("File è scansione a 8 bit")
+        print("[MODULO 0] - File è scansione a 8 bit")
         img_float = img.astype(np.float32) / 255.0
 
     # 2. Gestione della Linearizzazione Spaziale
     if is_linear_raw:
         linear_rgb = img_float
         print(
-            "   ✓ [MODULO 0] Input riconosciuto come TIFF LINEARE (VueScan RAW). Nessuna de-gamma applicata."
+            "[MODULO 0] - Input riconosciuto come TIFF LINEARE (VueScan RAW). Nessuna de-gamma applicata."
         )
     else:
         # Rimozione della gamma sRGB per immagini convenzionali
@@ -48,22 +48,15 @@ def load_and_normalize(
             np.power((img_float + 0.055) / 1.055, 2.4),
         )
         print(
-            "   ✓ [MODULO 0] Input riconosciuto come sRGB. Convertito in spazio Lineare."
+            "[MODULO 0] - Input riconosciuto come sRGB. Convertito in spazio Lineare."
         )
 
     return linear_rgb
 
 
 def expose_to_the_right(img: np.ndarray, target_white: float = 99.95) -> np.ndarray:
-
-    print(
-        f"input image - Pixel where green more dominant than red: {np.where(img[:, :, 0] < img[:, :, 1])}"
-    )
-
     # 2. Identificazione del punto di bianco della luminanza
     y_max = np.percentile(img, target_white)
-
-    print(f"y_max percentile: {y_max} - y_max full: {img.max()}")
 
     # Evitiamo divisioni per zero o valori nulli
     if y_max < 1e-6:
@@ -72,35 +65,20 @@ def expose_to_the_right(img: np.ndarray, target_white: float = 99.95) -> np.ndar
     # 3. Calcolo del guadagno scalare UNICO per tutta l'immagine (Stile slider Exposure)
     gain = 1.0 / y_max
 
-    print(f"gain: {gain}")
-
     # 4. Applicazione dello stesso guadagno su tutti i canali per non alterare la tinta
     img_scaled = img * gain
-    print(
-        f"img_scaled- Pixel where green more dominant than red: {np.where(img_scaled[:, :, 0] < img_scaled[:, :, 1])}"
-    )
 
     # 3. Identificazione del valore massimo per ogni singolo PIXEL tra i 3 canali
     # Shape: (H, W, 1)
     pixel_max = np.max(img_scaled, axis=-1, keepdims=True)
-
-    print(f"pixel max shape: {pixel_max.shape}")
 
     # 4. Calcolo del fattore di scala locale:
     # Se pixel_max > 1.0, dividiamo per pixel_max (cioè moltiplichiamo per 1 / pixel_max)
     # Se pixel_max <= 1.0, il fattore rimane 1.0 (nessuna modifica)
     scale_factor = np.where(pixel_max > 1.0, 1.0 / pixel_max, 1.0)
 
-    print(f"scale_factor: min: {scale_factor.min()} - max: {scale_factor.max()}")
-
     # 5. Applicazione del descaling locale per preservare la tinta (R:G:B invariato)
     img_out = img_scaled * scale_factor
-    print(f"img_out: min: {img_out.min()} - max: {img_out.max()}")
-    print(
-        f"img_out - Pixel where green more dominant than red: {np.where(img_out[:, :, 0] < img_out[:, :, 1])}"
-    )
-
-    print(np.sum(np.where(img_out > 1)), img_out.max())
 
     return np.clip(img_out, 0.0, 1.0)
 

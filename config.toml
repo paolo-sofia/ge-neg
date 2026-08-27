@@ -1,0 +1,6 @@
+[paths]
+watch_dir = "~/Immagini/analog_images/bronze/nikon_coolscan"
+output_dir = "~/Immagini/analog_images/silver/nikon_coolscan"
+
+[settings]
+valid_extensions = [".tiff", ".tif"]

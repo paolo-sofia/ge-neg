@@ -1,0 +1,14 @@
+[Unit]
+Description=VueScan Automated Image Processing Pipeline
+After=graphical-session.target
+
+[Service]
+Type=simple
+# Inserisci il percorso al tuo interprete python (o venv) e allo script
+ExecStart=/home/paolo/git/ge-neg/.venv/bin/python3 /home/paolo/git/ge-neg/ge_neg/pipeline_watcher.py
+WorkingDirectory=/home/paolo/git/ge-neg/
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

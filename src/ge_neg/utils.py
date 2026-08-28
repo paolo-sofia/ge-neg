@@ -25,9 +25,15 @@ def downsample_for_optimizer(
 
 
 def save_to_file(img: np.ndarray, output_path: pathlib.Path, suffix: str) -> bool:
-    if suffix:
-        new_filename: str = f"{output_path.stem}_{suffix}{output_path.suffix}"
-        output_path = output_path.parent / new_filename
+    if output_path.is_dir():
+        if suffix:
+            output_path = output_path.parent / f"{suffix}.tif"
+        else:
+            output_path = output_path / "contrast_boosted.tif"
+    else:
+        if suffix:
+            new_filename: str = f"{output_path.stem}_{suffix}{output_path.suffix}"
+            output_path = output_path.parent / new_filename
 
     img_clip = np.clip(img, 0.0, 1.0)
     img_16bit = (img_clip * 65535.0).astype(np.uint16)

@@ -229,7 +229,7 @@ class BorderIdentifier:
         self._find_border(direction="bottom")
         print("[MODULO 1] - All borders found")
 
-    def get_borders(self) -> np.ndarray:
+    def _get_borders_array(self) -> np.ndarray:
         crop_mask = np.zeros(shape=self.img.shape, dtype=bool)
         crop_mask[
             self.borders["top"] : self.borders["bottom"],
@@ -237,8 +237,16 @@ class BorderIdentifier:
         ] = True
         return self.img[~crop_mask].reshape(-1, 3)
 
+    def get_image_coordinates(self) -> tuple[int, int, int, int]:
+        return (
+            self.borders["top"],
+            self.borders["bottom"],
+            self.borders["left"],
+            self.borders["right"],
+        )
+
     def get_film_base(self) -> np.ndarray:
-        return np.median(self.get_borders(), axis=0)
+        return np.median(self._get_borders_array(), axis=0)
 
     def get_image(self) -> np.ndarray:
         return self.img[

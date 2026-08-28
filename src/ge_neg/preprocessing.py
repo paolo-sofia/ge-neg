@@ -4,16 +4,7 @@ import cv2
 import numpy as np
 
 
-def load_and_normalize(
-    image_path: pathlib.Path, is_linear_raw: bool = True
-) -> np.ndarray:
-    # 1. Caricamento / Normalizzazione iniziale a float32 [0.0, 1.0]
-    # Usiamo IMREAD_UNCHANGED per preservare i 16-bit reali dei TIFF di VueScan
-
-    img: np.ndarray | None = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
-    if img is None:
-        raise FileNotFoundError(f"Impossibile caricare l'immagine: {image_path}")
-
+def normalize_image(img: np.ndarray, is_linear: bool) -> np.ndarray:
     if img.ndim == 2:  # Conversione B/N -> RGB a 3 canali
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     elif img.shape[2] == 3:
@@ -22,38 +13,22 @@ def load_and_normalize(
         img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGB)
 
     # Scala in base alla profondità di bit del file
-    if img.dtype == np.uint16:
-        print("[MODULO 0] - File è scansione a 16 bit")
-        img_float = img.astype(np.float32) / 65535.0
-        # Di default, un TIFF a 16-bit da VueScan viene trattato come Lineare
-        is_linear_raw = True
-    else:
-        print("[MODULO 0] - File è scansione a 8 bit")
-        img_float = img.astype(np.float32) / 255.0
+    img_float: np.ndarray = img.astype(np.float32) / (2 ** (img.dtype.itemsize * 8) - 1)
 
     # 2. Gestione della Linearizzazione Spaziale
-    if is_linear_raw:
-        linear_rgb = img_float
-        print(
-            "[MODULO 0] - Input riconosciuto come TIFF LINEARE (VueScan RAW). Nessuna de-gamma applicata."
-        )
-    else:
-        # Rimozione della gamma sRGB per immagini convenzionali
-        linear_rgb = np.where(
-            img_float <= 0.04045,
-            img_float / 12.92,
-            np.power((img_float + 0.055) / 1.055, 2.4),
-        )
-        print(
-            "[MODULO 0] - Input riconosciuto come sRGB. Convertito in spazio Lineare."
-        )
+    if is_linear:
+        return img_float
 
-    return linear_rgb
+    return np.where(
+        img_float <= 0.04045,
+        img_float / 12.92,
+        np.power((img_float + 0.055) / 1.055, 2.4),
+    )
 
 
 def expose_to_the_right(img: np.ndarray, target_white: float = 99.95) -> np.ndarray:
     # 2. Identificazione del punto di bianco della luminanza
-    y_max = np.percentile(img, target_white)
+    y_max: float = np.percentile(img, target_white)
 
     # Evitiamo divisioni per zero o valori nulli
     if y_max < 1e-6:
@@ -162,33 +137,3 @@ def find_biggest_masked_rectangle(mask: np.ndarray) -> tuple[int, int, int, int]
         return start_point, end_point, 0, height
     else:
         return 0, width, start_point, end_point
-
-
-def remove_scanner_light(img: np.ndarray, white_threshold: float = 0.97) -> np.ndarray:
-    """
-    Rimuove il vuoto dello scanner binarizzando l'immagine e prendendo
-    il bounding box interno più conservativo per eliminare i tagli obliqui.
-
-    :param rgb_float: Immagine RGB float32 [0.0, 1.0]
-    :param white_threshold: Soglia per considerare un pixel come Bianco Puro (Vuoto Scanner)
-    :return: Immagine ritagliata priva di qualsiasi pixel di bianco puro
-    """
-
-    gray: np.ndarray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-
-    film_mask = ((gray < white_threshold) * 255).astype(np.uint8)
-
-    kernel = np.ones((10, 10), np.uint8)
-    # 3. Chiusura (Morphological Closing: Dilation -> Erosion)
-    mask_morph = cv2.morphologyEx(film_mask, cv2.MORPH_CLOSE, kernel)
-
-    for i in range(5):
-        # 2. Apertura (Morphological Opening: Erosion -> Dilation)
-        mask_morph = cv2.morphologyEx(mask_morph, cv2.MORPH_OPEN, kernel)
-
-    borders: tuple[int, int, int, int] = find_biggest_masked_rectangle(mask_morph)
-    x_min, x_max, y_min, y_max = borders
-
-    # 3. Ritaglia l'immagine originale usando slicing NumPy
-    cropped_img = img[x_min:x_max, y_min:y_max]
-    return cropped_img

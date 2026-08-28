@@ -4,3 +4,6 @@ output_dir = "~/Immagini/analog_images/silver/nikon_coolscan"
 
 [settings]
 valid_extensions = [".tiff", ".tif"]
+
+[db]
+path = "db/image_processing.db"

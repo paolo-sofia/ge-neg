@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pygad
 
-from ge_neg.utils import apply_s_curve, downsample_for_optimizer
+from src.ge_neg.utils import apply_s_curve, downsample_for_optimizer
 
 
 class ContrastBoosterGenetic:

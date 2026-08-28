@@ -1,70 +1,195 @@
+import hashlib
+import os
 import pathlib
+from time import perf_counter_ns
+from typing import Any
 
-from ge_neg.border_identifier import BorderIdentifier
-from ge_neg.contrast_booster import ContrastBoosterGenetic
-from ge_neg.inversion import inversion_and_density_balance
-from ge_neg.preprocessing import (
+import cv2
+import numpy as np
+
+from src.ge_neg.border_identifier import BorderIdentifier
+from src.ge_neg.contrast_booster import ContrastBoosterGenetic
+from src.ge_neg.db import save_to_db
+from src.ge_neg.inversion import inversion_and_density_balance
+from src.ge_neg.preprocessing import (
     expose_to_the_right,
-    load_and_normalize,
-    remove_scanner_light,
+    find_biggest_masked_rectangle,
+    normalize_image,
 )
-from ge_neg.utils import apply_s_curve, save_to_file
-from ge_neg.white_balance import film_base_wb, scene_wb
+from src.ge_neg.utils import apply_s_curve, save_to_file
+from src.ge_neg.white_balance import film_base_wb, scene_wb
+from src.metadata import get_metadata
 
 
-def process_image(
-    input_path: pathlib.Path, output_path: pathlib.Path, debug: bool = False
-) -> bool:
-    print("[MODULO 0] - Caricamento e normalizzazione immagine")
-    img = load_and_normalize(input_path)
+class ImageProcessor:
+    def __init__(self, image_path: pathlib.Path, output_path: pathlib.Path) -> None:
+        self.image_path: pathlib.Path = image_path
+        self.output_path: pathlib.Path = output_path
+        self.processed_image: np.ndarray = np.empty(shape=(0, 0))
+        self.execution_time_ms: float = -1
+        self.error_message: str | None = None
+        self.processing_status: str = ""
 
-    print("[MODULO 0] - Rimozione luce scanner")
-    trimmed_image = remove_scanner_light(img)
-    if debug:
-        _ = save_to_file(trimmed_image, output_path, "scanner_crop")
+        self.metadata: dict[str, Any] = {}
+        self.is_linear: bool = False
+        self.channels: int = -1
+        self.bit_depth: str = ""
+        self.pixel_hash: str = ""
+        self.file_hash: str = ""
+        self.image_width: int = -1
+        self.image_height: int = -1
+        self.file_size_bytes: int = -1
 
-    print("[MODULO 0] - Compensazione dell'esposizione con ETTR")
-    ettr = expose_to_the_right(trimmed_image)
-    if debug:
-        _ = save_to_file(ettr, output_path, "exposure_compensation")
+        self.scanner_light_borders: tuple[int, int, int, int] = (-1, -1, -1, -1)
+        self.borders: tuple[int, int, int, int] = (-1, -1, -1, -1)
+        self.film_base: tuple[float, float, float] = (-1.0, -1.0, -1.0)
+        self.contrast_booster_solution: tuple[float, float, float] = (-1.0, -1.0, -1.0)
+        self.contrast_booster_fitness: float = -1.0
 
-    print("[MODULO 1] - Identify borders and compute film base")
-    border_identifier = BorderIdentifier(img=ettr)
-    border_identifier.find_borders()
-    photo_pixels = border_identifier.get_image()
+    def load_image_and_compute_hashes_and_metadata(self) -> np.ndarray:
+        """Calcola hash del file, hash dei pixel grezzi e metadati dell'immagine."""
+        if not os.path.exists(self.image_path):
+            raise FileNotFoundError(f"File non trovato: {self.image_path}")
 
-    if debug:
-        _ = save_to_file(photo_pixels, output_path, "tagliata")
+        # 1. Hash del file fisico
+        file_hasher = hashlib.sha256()
+        with open(self.image_path, "rb") as f:
+            while chunk := f.read(8192):
+                file_hasher.update(chunk)
+        self.file_hash = file_hasher.hexdigest()
+        self.file_size_bytes = int(os.path.getsize(self.image_path))
 
-    print("[MODULO 2] - Film base white balance")
-    image_wb = film_base_wb(
-        photo_pixels, film_base_color=border_identifier.get_film_base()
-    )
-    if debug:
-        _ = save_to_file(image_wb, output_path, "wb")
+        # 2. Hash dei pixel grezzi (OpenCV)
+        img = cv2.imread(self.image_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError(f"Impossibile decodificare l'immagine: {self.image_path}")
 
-    print("[MODULO 3] - Inversion and density balance")
-    positive_img = inversion_and_density_balance(image_wb)
+        img_bytes = np.ascontiguousarray(img).tobytes()
+        self.pixel_hash = hashlib.sha256(img_bytes).hexdigest()
 
-    if debug:
-        _ = save_to_file(positive_img, output_path, "positive")
+        self.image_width = img.shape[1]
+        self.image_height = img.shape[0]
+        self.channels = int(img.shape[2]) if len(img.shape) > 2 else 1
+        self.bit_depth = str(img.dtype)
 
-    print("[MODULO 3] - Scene white balance")
-    img_scene_wb = scene_wb(positive_img)
+        self.metadata = get_metadata(self.image_path)
 
-    if debug:
-        _ = save_to_file(img_scene_wb, output_path, "wb_scena")
+        self.is_linear = self.metadata.get("color_space", "") == "Uncalibrated"
 
-    print("[MODULO 4] - Contrast booster")
-    contrast_booster = ContrastBoosterGenetic(img_scene_wb)
-    contrast_booster.run()
-    x0, k, h = contrast_booster.genetic_optimizer.best_solution()[0]
-    print(
-        f"[MODULO 4] - Parametri migliori per curva di contrasto: x0 = {x0} - k = {k} - h = {h}"
-    )
-    contrasted_image = apply_s_curve(
-        img_scene_wb, *contrast_booster.genetic_optimizer.best_solution()[0]
-    )
-    return save_to_file(
-        contrasted_image, output_path, "contrast_booster" if debug else ""
-    )
+        return img
+
+    def remove_scanner_light(
+        self, img: np.ndarray, white_threshold: float = 0.97
+    ) -> np.ndarray:
+        """
+        Rimuove il vuoto dello scanner binarizzando l'immagine e prendendo
+        il bounding box interno più conservativo per eliminare i tagli obliqui.
+
+        :param rgb_float: Immagine RGB float32 [0.0, 1.0]
+        :param white_threshold: Soglia per considerare un pixel come Bianco Puro (Vuoto Scanner)
+        :return: Immagine ritagliata priva di qualsiasi pixel di bianco puro
+        """
+
+        gray: np.ndarray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+
+        film_mask = ((gray < white_threshold) * 255).astype(np.uint8)
+
+        kernel = np.ones((10, 10), np.uint8)
+        # 3. Chiusura (Morphological Closing: Dilation -> Erosion)
+        mask_morph = cv2.morphologyEx(film_mask, cv2.MORPH_CLOSE, kernel)
+
+        for _ in range(5):
+            # 2. Apertura (Morphological Opening: Erosion -> Dilation)
+            mask_morph = cv2.morphologyEx(mask_morph, cv2.MORPH_OPEN, kernel)
+
+        borders: tuple[int, int, int, int] = find_biggest_masked_rectangle(mask_morph)
+        x_min, x_max, y_min, y_max = borders
+        self.scanner_light_borders = (int(x_min), int(x_max), int(y_min), int(y_max))
+        print(f"scanner light borders: {borders}")
+
+        # 3. Ritaglia l'immagine originale usando slicing NumPy
+        cropped_img = img[x_min:x_max, y_min:y_max]
+        return cropped_img
+
+    def run(self, db_path: pathlib.Path) -> None:
+        start_time = perf_counter_ns()
+
+        try:
+            _ = self.process_image()
+            self.processing_status = "SUCCESS"
+        except Exception as e:
+            print(e)
+            self.error_message = str(e)
+            self.processing_status = "FAILURE"
+        finally:
+            stop_time = perf_counter_ns()
+            self.execution_time_ms = (stop_time - start_time) / 1_000_000
+            pixel_hash, processed_at = save_to_db(db_path, self.__dict__)
+            print(f"Image with hash {pixel_hash} processed at time: {processed_at}")
+
+    def process_image(self, debug: bool = False) -> bool:
+        print("[MODULO 0] - Caricamento e normalizzazione immagine")
+        img: np.ndarray = self.load_image_and_compute_hashes_and_metadata()
+        img = normalize_image(img, self.is_linear)
+
+        print(f"[MODULO 0] - Rimozione luce scanner. img shape: {img.shape}")
+        trimmed_image = self.remove_scanner_light(img)
+        if debug:
+            _ = save_to_file(trimmed_image, self.output_path, "scanner_crop")
+
+        print("[MODULO 0] - Compensazione dell'esposizione con ETTR")
+        ettr = expose_to_the_right(trimmed_image)
+        if debug:
+            _ = save_to_file(ettr, self.output_path, "exposure_compensation")
+
+        print("[MODULO 1] - Identify borders and compute film base")
+        border_identifier = BorderIdentifier(img=ettr)
+        border_identifier.find_borders()
+        photo_pixels = border_identifier.get_image()
+        film_base = border_identifier.get_film_base()
+        self.film_base = tuple(film_base.tolist())
+        self.borders = border_identifier.get_image_coordinates()
+
+        if debug:
+            _ = save_to_file(photo_pixels, self.output_path, "tagliata")
+
+        print("[MODULO 2] - Film base white balance")
+        image_wb = film_base_wb(photo_pixels, film_base_color=film_base)
+        if debug:
+            _ = save_to_file(image_wb, self.output_path, "wb")
+
+        print("[MODULO 3] - Inversion and density balance")
+        positive_img = inversion_and_density_balance(image_wb)
+
+        if debug:
+            _ = save_to_file(positive_img, self.output_path, "positive")
+
+        print("[MODULO 3] - Scene white balance")
+        img_scene_wb = scene_wb(positive_img)
+
+        if debug:
+            _ = save_to_file(img_scene_wb, self.output_path, "wb_scena")
+
+        print("[MODULO 4] - Contrast booster")
+        contrast_booster = ContrastBoosterGenetic(img_scene_wb)
+        contrast_booster.run()
+        solution = contrast_booster.genetic_optimizer.best_solution()[0]
+        self.contrast_booster_solution = (
+            float(solution[0]),
+            float(solution[1]),
+            float(solution[2]),
+        )
+        self.contrast_booster_fitness = float(
+            contrast_booster.genetic_optimizer.best_solution()[1]
+        )
+        print(
+            f"[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution}"
+        )
+        self.processed_image = apply_s_curve(
+            img_scene_wb, *contrast_booster.genetic_optimizer.best_solution()[0]
+        )
+        return save_to_file(
+            self.processed_image,
+            self.output_path,
+            self.image_path.stem if debug else "",
+        )

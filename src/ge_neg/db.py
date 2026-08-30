@@ -23,6 +23,8 @@ def init_db(db_path: str | pathlib.Path):
                 pixel_hash TEXT PRIMARY KEY,
                 file_hash TEXT NOT NULL,
                 file_path TEXT NOT NULL,
+                film_roll_id TEXT NOT NULL,
+                frame_number TEXT NOT NULL,
                 width INTEGER NOT NULL,
                 height INTEGER NOT NULL,
                 channels INTEGER NOT NULL,
@@ -33,7 +35,7 @@ def init_db(db_path: str | pathlib.Path):
                 color_space TEXT,
                 scanner_make TEXT,
                 scanner_model TEXT,
-                created_at TEXT DEFAULT (CURRENT_TIMESTAMP)
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
             ) STRICT;
         """)
 
@@ -41,9 +43,12 @@ def init_db(db_path: str | pathlib.Path):
         _ = cursor.execute("""
             CREATE TABLE IF NOT EXISTS process_parameters (
                 pixel_hash TEXT NOT NULL,
-                processed_at TEXT DEFAULT (CURRENT_TIMESTAMP),
+                processed_at TEXT DEFAULT (datetime('now', 'localtime')),
                 status TEXT,
                 failure_reason TEXT,
+                output_path TEXT,
+                filename TEXT,
+                execution_time_ms INTEGER,
 
                 -- Coordinate luce scanner
                 scanner_light_start_x INTEGER,
@@ -62,20 +67,31 @@ def init_db(db_path: str | pathlib.Path):
                 film_base_green REAL,
                 film_base_blue REAL,
 
-                -- White Balance della scena (RGB)
-                wb_red REAL,
-                wb_green REAL,
-                wb_blue REAL,
-
                 -- Parametri Algoritmo Genetico & Fitness
                 x0 REAL NOT NULL,
                 k REAL NOT NULL,
                 h REAL NOT NULL,
                 fitness_score REAL,
 
-                -- Output ed esecuzione
-                output_path TEXT,
-                execution_time_ms INTEGER,
+                -- Image features
+                film_type TEXT,
+                ev_shift REAL,
+                d_avg REAL,
+                d_min REAL,
+                d_max REAL,
+                dynamic_range REAL,
+                snr_db REAL,
+                brightness_mean REAL,
+                contrast_rms REAL,
+                clipped_shadows_pct REAL,
+                clipped_highlights_pct REAL,
+                sharpness_score REAL,
+                final_mean_r REAL,
+                final_mean_g REAL,
+                final_mean_b REAL,
+                temperature_score REAL,
+                temperature_label TEXT,
+                random_seed INTEGER,
 
                 PRIMARY KEY (pixel_hash, processed_at),
                 FOREIGN KEY (pixel_hash) REFERENCES image_info (pixel_hash) ON DELETE CASCADE
@@ -87,11 +103,15 @@ def init_db(db_path: str | pathlib.Path):
 def save_to_db(
     db_path: str | pathlib.Path, data: dict[str, str | int | float]
 ) -> tuple[str, str]:
-    with get_connection(db_path) as conn:
-        pixel_hash = get_or_create_image_info(conn, data)
-        pixel_hash, processed_at = insert_process_run(conn, pixel_hash, data)
+    try:
+        with get_connection(db_path) as conn:
+            pixel_hash = get_or_create_image_info(conn, data)
+            pixel_hash, processed_at = insert_process_run(conn, pixel_hash, data)
 
-    return pixel_hash, processed_at
+        return pixel_hash, processed_at
+    except Exception as e:
+        print(f"Error while saving to db. {e}")
+        return "", ""
 
 
 def get_or_create_image_info(
@@ -105,14 +125,16 @@ def get_or_create_image_info(
     _ = cursor.execute(
         """
         INSERT INTO image_info
-        (pixel_hash, file_hash, file_path, width, height, channels, bit_depth, file_size_bytes, is_linear, scanning_software, color_space, scanner_make, scanner_model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (pixel_hash, file_hash, file_path, film_roll_id, frame_number, width, height, channels, bit_depth, file_size_bytes, is_linear, scanning_software, color_space, scanner_make, scanner_model)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(pixel_hash) DO UPDATE SET file_path = excluded.file_path
     """,
         (
             data.get("pixel_hash", ""),
             data.get("file_hash", ""),
             str(data.get("image_path", "")),
+            data.get("roll_number", ""),
+            data.get("frame_number", ""),
             data.get("image_width", -1),
             data.get("image_height", -1),
             data.get("channels", -1),
@@ -133,16 +155,15 @@ def insert_process_run(
     conn: sqlite3.Connection, pixel_hash: str, process_data: dict[str, str | int]
 ) -> tuple[str, str]:
     """Inserisce un nuovo record nello storico garantendo il rispetto dei tipi STRICT."""
-    print(f"Inserting data into process_parameters table. data: {process_data}")
+    print(f"Inserting data into process_parameters table.")
     cursor = conn.cursor()
 
     # Estrazione tuple coordinate con casting difensivo per la modalita STRICT
     sc_box: tuple[int, int, int, int] = process_data.get(
-        "scanner_light_box", (-1, -1, -1, -1)
+        "scanner_light_borders", (-1, -1, -1, -1)
     )
-    cr_box: tuple[int, int, int, int] = process_data.get("crop_box", (-1, -1, -1, -1))
-    fb_rgb = process_data.get("film_base_rgb", (-1, -1, -1))
-    wb_rgb = process_data.get("white_balance_rgb", (-1, -1, -1))
+    cr_box: tuple[int, int, int, int] = process_data.get("borders", (-1, -1, -1, -1))
+    fb_rgb = process_data.get("film_base", (-1, -1, -1))
 
     _ = cursor.execute(
         """
@@ -150,20 +171,40 @@ def insert_process_run(
             pixel_hash,
             status,
             failure_reason,
+            output_path, filename, execution_time_ms,
             scanner_light_start_x, scanner_light_end_x, scanner_light_start_y, scanner_light_end_y,
             img_start_x, img_end_x, img_start_y, img_end_y,
             film_base_red, film_base_green, film_base_blue,
-            wb_red, wb_green, wb_blue,
             x0, k, h, fitness_score,
-            output_path, execution_time_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            film_type,
+            ev_shift,
+            d_avg,
+            d_min,
+            d_max,
+            dynamic_range,
+            snr_db,
+            brightness_mean,
+            contrast_rms,
+            clipped_shadows_pct,
+            clipped_highlights_pct,
+            sharpness_score,
+            final_mean_r,
+            final_mean_g,
+            final_mean_b,
+            temperature_score,
+            temperature_label,
+            random_seed
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING processed_at
     """,
         (
             pixel_hash,
-            process_data.get("status", "UNKNOWN"),
-            process_data.get("failure_reason", "UNKNOWN"),
-            int(sc_box[0]),
+            process_data.get("processing_status", "UNKNOWN"),
+            process_data.get("error_message", ""),
+            str(process_data.get("output_path")),
+            str(process_data.get("output_filename", "")),
+            int(process_data["execution_time_ms"]),
+            sc_box[0],
             sc_box[1],
             sc_box[2],
             sc_box[3],
@@ -174,15 +215,42 @@ def insert_process_run(
             fb_rgb[0],
             fb_rgb[1],
             fb_rgb[2],
-            wb_rgb[0],
-            wb_rgb[1],
-            wb_rgb[2],
-            float(process_data.get("x0", -1)),
-            float(process_data.get("k", -1)),
-            float(process_data.get("h", -1)),
-            float(process_data.get("fitness_score", -1)),
-            str(process_data.get("output_path")),
-            int(process_data["execution_time_ms"]),
+            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[0]),
+            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[1]),
+            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[2]),
+            float(process_data.get("'contrast_booster_fitness'", -1.0)),
+            process_data.get("processed_image_features", {}).get(
+                "film_type", "UNKNOWN"
+            ),
+            process_data.get("processed_image_features", {}).get("ev_shift", -1.0),
+            process_data.get("processed_image_features", {}).get("d_avg", -1.0),
+            process_data.get("processed_image_features", {}).get("d_min", -1.0),
+            process_data.get("processed_image_features", {}).get("d_max", -1.0),
+            process_data.get("processed_image_features", {}).get("dynamic_range", -1.0),
+            process_data.get("processed_image_features", {}).get("snr_db", -1.0),
+            process_data.get("processed_image_features", {}).get(
+                "brightness_mean", -1.0
+            ),
+            process_data.get("processed_image_features", {}).get("contrast_rms", -1.0),
+            process_data.get("processed_image_features", {}).get(
+                "clipped_shadows_pct", -1.0
+            ),
+            process_data.get("processed_image_features", {}).get(
+                "clipped_highlights_pct", -1.0
+            ),
+            process_data.get("processed_image_features", {}).get(
+                "sharpness_score", -1.0
+            ),
+            process_data.get("processed_image_features", {}).get("final_mean_r", -1.0),
+            process_data.get("processed_image_features", {}).get("final_mean_g", -1.0),
+            process_data.get("processed_image_features", {}).get("final_mean_b", -1.0),
+            process_data.get("processed_image_features", {}).get(
+                "temperature_score", -1.0
+            ),
+            process_data.get("processed_image_features", {}).get(
+                "temperature_label", "UNKNOWN"
+            ),
+            process_data.get("seed", -1),
         ),
     )
 

@@ -134,6 +134,6 @@ def find_biggest_masked_rectangle(mask: np.ndarray) -> tuple[int, int, int, int]
         end_point = np.max(sorted(axis_end_white_pixels))
 
     if is_reversed:
-        return start_point, end_point, 0, height
+        return start_point, end_point, 0, width
     else:
-        return 0, width, start_point, end_point
+        return 0, height, start_point, end_point

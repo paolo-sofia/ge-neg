@@ -1,6 +1,8 @@
 import hashlib
 import os
 import pathlib
+import random
+import re
 from time import perf_counter_ns
 from typing import Any
 
@@ -16,19 +18,34 @@ from src.ge_neg.preprocessing import (
     find_biggest_masked_rectangle,
     normalize_image,
 )
-from src.ge_neg.utils import apply_s_curve, save_to_file
+from src.ge_neg.utils import (
+    apply_s_curve,
+    compute_final_image_metrics,
+    predict_film_type,
+    save_to_file,
+)
 from src.ge_neg.white_balance import film_base_wb, scene_wb
 from src.metadata import get_metadata
 
 
 class ImageProcessor:
-    def __init__(self, image_path: pathlib.Path, output_path: pathlib.Path) -> None:
+    def __init__(
+        self,
+        processed_hashes: list[str],
+        image_path: pathlib.Path,
+        output_path: pathlib.Path,
+    ) -> None:
+        self.processed_hashes: list[str] = processed_hashes
         self.image_path: pathlib.Path = image_path
         self.output_path: pathlib.Path = output_path
+        self.output_filename: str = ""
         self.processed_image: np.ndarray = np.empty(shape=(0, 0))
         self.execution_time_ms: float = -1
         self.error_message: str | None = None
-        self.processing_status: str = ""
+        self.processing_status: str = "TO_PROCESS"
+        self.roll_number: str = ""
+        self.frame_number: str = ""
+        self.seed: int = random.randint(1, 1_000_000)
 
         self.metadata: dict[str, Any] = {}
         self.is_linear: bool = False
@@ -45,6 +62,21 @@ class ImageProcessor:
         self.film_base: tuple[float, float, float] = (-1.0, -1.0, -1.0)
         self.contrast_booster_solution: tuple[float, float, float] = (-1.0, -1.0, -1.0)
         self.contrast_booster_fitness: float = -1.0
+        self.processed_image_features: dict[str, str | int | float] = {}
+        self.film_type: str = ""
+
+        self._get_roll_info()
+
+    def _get_roll_info(self) -> None:
+        film_roll_folder: str = self.image_path.parent.stem
+        match = re.match(r"film_(\d+)", film_roll_folder)
+        if match:
+            self.roll_number = match.group(1)
+
+        frame_number: str = self.image_path.stem
+        match = re.match(r"img_(\d+)_(\d+)", frame_number)
+        if match:
+            self.frame_number = match.group().split("_")[-1]
 
     def load_image_and_compute_hashes_and_metadata(self) -> np.ndarray:
         """Calcola hash del file, hash dei pixel grezzi e metadati dell'immagine."""
@@ -105,34 +137,49 @@ class ImageProcessor:
         borders: tuple[int, int, int, int] = find_biggest_masked_rectangle(mask_morph)
         x_min, x_max, y_min, y_max = borders
         self.scanner_light_borders = (int(x_min), int(x_max), int(y_min), int(y_max))
-        print(f"scanner light borders: {borders}")
 
         # 3. Ritaglia l'immagine originale usando slicing NumPy
         cropped_img = img[x_min:x_max, y_min:y_max]
         return cropped_img
 
-    def run(self, db_path: pathlib.Path) -> None:
+    def run(self, db_path: pathlib.Path) -> str:
         start_time = perf_counter_ns()
 
         try:
             _ = self.process_image()
-            self.processing_status = "SUCCESS"
+
         except Exception as e:
             print(e)
             self.error_message = str(e)
             self.processing_status = "FAILURE"
         finally:
-            stop_time = perf_counter_ns()
-            self.execution_time_ms = (stop_time - start_time) / 1_000_000
-            pixel_hash, processed_at = save_to_db(db_path, self.__dict__)
-            print(f"Image with hash {pixel_hash} processed at time: {processed_at}")
+            if self.processing_status in ("SUCCESS", "FAILURE"):
+                stop_time = perf_counter_ns()
+                self.execution_time_ms = (stop_time - start_time) / 1_000_000
+                pixel_hash, processed_at = save_to_db(db_path, self.__dict__)
+                print(
+                    f"[MAIN MODULE] - Image with hash {pixel_hash} processed at time: {processed_at} with status {self.processing_status}"
+                )
+            else:
+                print(
+                    f"[MAIN MODULE] - Image has status {self.processing_status}. Skipping save to db"
+                )
 
-    def process_image(self, debug: bool = False) -> bool:
+        # for k, v in self.__dict__.items():
+        #     print(k, v)
+        return self.pixel_hash
+
+    def process_image(self, debug: bool = False) -> None:
         print("[MODULO 0] - Caricamento e normalizzazione immagine")
         img: np.ndarray = self.load_image_and_compute_hashes_and_metadata()
+
+        if self.pixel_hash in self.processed_hashes:
+            self.processing_status = "ALREADY_PROCESSED"
+            return
+
         img = normalize_image(img, self.is_linear)
 
-        print(f"[MODULO 0] - Rimozione luce scanner. img shape: {img.shape}")
+        print(f"[MODULO 0] - Rimozione luce scanner")
         trimmed_image = self.remove_scanner_light(img)
         if debug:
             _ = save_to_file(trimmed_image, self.output_path, "scanner_crop")
@@ -149,6 +196,9 @@ class ImageProcessor:
         film_base = border_identifier.get_film_base()
         self.film_base = tuple(film_base.tolist())
         self.borders = border_identifier.get_image_coordinates()
+
+        print("[MODULE 1] - Predicting film type")
+        self.film_type = predict_film_type(self.film_base)
 
         if debug:
             _ = save_to_file(photo_pixels, self.output_path, "tagliata")
@@ -171,7 +221,7 @@ class ImageProcessor:
             _ = save_to_file(img_scene_wb, self.output_path, "wb_scena")
 
         print("[MODULO 4] - Contrast booster")
-        contrast_booster = ContrastBoosterGenetic(img_scene_wb)
+        contrast_booster = ContrastBoosterGenetic(img_scene_wb, seed=self.seed)
         contrast_booster.run()
         solution = contrast_booster.genetic_optimizer.best_solution()[0]
         self.contrast_booster_solution = (
@@ -183,13 +233,22 @@ class ImageProcessor:
             contrast_booster.genetic_optimizer.best_solution()[1]
         )
         print(
-            f"[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution}"
+            f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
+            ==========================================================================================================================================================="""
         )
         self.processed_image = apply_s_curve(
             img_scene_wb, *contrast_booster.genetic_optimizer.best_solution()[0]
         )
-        return save_to_file(
+        output_path: pathlib.Path = save_to_file(
             self.processed_image,
             self.output_path,
             self.image_path.stem if debug else "",
         )
+
+        self.output_filename = output_path.name
+
+        self.processed_image_features = compute_final_image_metrics(
+            self.processed_image, self.bit_depth
+        )
+
+        self.processing_status = "SUCCESS"

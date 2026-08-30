@@ -9,7 +9,8 @@ import tomllib
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from pipeline import process_image
+from src.ge_neg.config_loader import db_path, valid_extensions
+from src.pipeline import ImageProcessor
 
 # Caricamento configurazione TOML
 config_path: pathlib.Path = Path(__file__).parent.parent / "config.toml"
@@ -48,6 +49,10 @@ output_folder.mkdir(exist_ok=True, parents=True)
 
 
 class VueScanFileHandler(FileSystemEventHandler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.processed_hashes: list[str] = []
+
     def on_closed(self, event):
         # Ripristina l'evento di chiusura scrittura file (IN_CLOSE_WRITE)
         if event.is_directory:
@@ -58,7 +63,7 @@ class VueScanFileHandler(FileSystemEventHandler):
         if file_path.suffix.lower() not in valid_extensions:
             return
 
-        print(f"[*] Rilevato nuovo file completo: {file_path.name}")
+        print(f"[*] Rilevato nuovo file completo: {file_path}")
         try:
             relative_path = file_path.relative_to(watch_folder)
         except ValueError:
@@ -68,11 +73,14 @@ class VueScanFileHandler(FileSystemEventHandler):
         out_path = output_folder / relative_path
         sleep(2)
         try:
-            is_image_processed_and_saved = process_image(file_path, out_path)
-            if is_image_processed_and_saved:
-                print(
-                    f"=============================== Image correctly saved to path: {out_path} ==============================="
-                )
+            print(
+                f" ============================== Processing image {file_path.stem} =============================="
+            )
+            image_processor: ImageProcessor = ImageProcessor(
+                self.processed_hashes, file_path, out_path
+            )
+            self.processed_hashes.append(image_processor.run(db_path))
+
         except Exception as e:
             print(e)
 

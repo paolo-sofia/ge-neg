@@ -1,5 +1,7 @@
 import numpy as np
 
+from src.ge_neg.utils import get_luminance
+
 
 class DynamicEdgeDetector:
     def __init__(
@@ -147,11 +149,12 @@ class BorderIdentifier:
         edge_detector = DynamicEdgeDetector()  # verbose=direction == "bottom"
 
         image: np.ndarray
+        limit_perc: float = 0.15
         limit: int
         while True:
             if direction == "left":
                 new_direction_value = self.borders[direction] + (self.step_x * i)
-                limit = int(self.image_shape[1] * 0.2)
+                limit = int(self.image_shape[1] * limit_perc)
 
                 is_last_iteration = new_direction_value >= limit
                 new_direction_value = min(new_direction_value, limit)
@@ -163,10 +166,7 @@ class BorderIdentifier:
                 ]
             elif direction == "right":
                 new_direction_value = self.borders[direction] - (self.step_x * i)
-                limit = int(self.image_shape[1] * 0.8)
-                print(
-                    f"new_direction_value: {new_direction_value} - limit: {limit} - border: {self.borders[direction]} - current_step: {self.step_x * i}"
-                )
+                limit = int(self.image_shape[1] * (1 - limit_perc))
 
                 is_last_iteration = new_direction_value <= limit
                 new_direction_value = max(new_direction_value, limit)
@@ -178,7 +178,7 @@ class BorderIdentifier:
                 ]
             elif direction == "top":
                 new_direction_value = self.borders[direction] + (self.step_y * i)
-                limit = int(self.image_shape[0] * 0.2)
+                limit = int(self.image_shape[0] * limit_perc)
 
                 is_last_iteration = new_direction_value >= limit
                 new_direction_value = min(new_direction_value, limit)
@@ -197,7 +197,7 @@ class BorderIdentifier:
             elif direction == "bottom":
                 new_direction_value = self.borders[direction] - (self.step_y * i)
 
-                limit = int(self.image_shape[0] * 0.8)
+                limit = int(self.image_shape[0] * (1 - limit_perc))
 
                 is_last_iteration = new_direction_value <= limit
                 new_direction_value = max(new_direction_value, limit)

@@ -19,6 +19,7 @@ from src.ge_neg.preprocessing import (
     normalize_image,
 )
 from src.ge_neg.utils import (
+    apply_log_logistic_curve,
     apply_s_curve,
     compute_final_image_metrics,
     predict_film_type,
@@ -224,11 +225,19 @@ class ImageProcessor:
         contrast_booster = ContrastBoosterGenetic(img_scene_wb, seed=self.seed)
         contrast_booster.run()
         solution = contrast_booster.genetic_optimizer.best_solution()[0]
-        self.contrast_booster_solution = (
-            float(solution[0]),
-            float(solution[1]),
-            float(solution[2]),
+
+        # denormalize values
+        x0 = contrast_booster.bounds[0][0] + solution[0] * (
+            contrast_booster.bounds[0][1] - contrast_booster.bounds[0][0]
         )
+        k = contrast_booster.bounds[1][0] + solution[1] * (
+            contrast_booster.bounds[1][1] - contrast_booster.bounds[1][0]
+        )
+        h = contrast_booster.bounds[2][0] + solution[2] * (
+            contrast_booster.bounds[2][1] - contrast_booster.bounds[2][0]
+        )
+
+        self.contrast_booster_solution = (x0, k, h)
         self.contrast_booster_fitness = float(
             contrast_booster.genetic_optimizer.best_solution()[1]
         )
@@ -236,9 +245,7 @@ class ImageProcessor:
             f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
             ==========================================================================================================================================================="""
         )
-        self.processed_image = apply_s_curve(
-            img_scene_wb, *contrast_booster.genetic_optimizer.best_solution()[0]
-        )
+        self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
         output_path: pathlib.Path = save_to_file(
             self.processed_image,
             self.output_path,

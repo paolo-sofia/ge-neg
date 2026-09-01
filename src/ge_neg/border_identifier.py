@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.ge_neg.utils import get_luminance
+from src.ge_neg.utils import image_entropy
 
 
 class DynamicEdgeDetector:
@@ -80,23 +80,6 @@ class DynamicEdgeDetector:
         # Se è rumore/variabilità normale, aggiungiamo alla baseline
         self.history.append(current_entropy)
         return False
-
-
-def image_entropy(image: np.ndarray) -> float:
-    """Calcola l'entropia media sui 3 canali colore per una fetta di immagine."""
-    if len(image.shape) == 2:
-        image = np.expand_dims(image, axis=-1)
-
-    entropies: list[float] = []
-    for i in range(len(image.shape)):
-        channel = image[..., i].ravel()
-        histogram, _ = np.histogram(
-            channel, bins=256, range=(0.0, 1.0) if channel.max() <= 1.0 else (0, 255)
-        )
-        p = histogram / histogram.sum()
-        p = p[p > 0]
-        entropies.append(-np.sum(p * np.log2(p)))
-    return float(np.sum(entropies))
 
 
 class BorderIdentifier:

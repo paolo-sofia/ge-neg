@@ -7,6 +7,72 @@ import numpy as np
 import tifffile
 
 
+def zonal_system_fitness_penalty(
+    img: np.ndarray,
+    alpha: float = 1.0,  # Peso per la continuità/morbidezza (Smoothness)
+    beta: float = 1.5,  # Peso per la penalizzazione dell'appiattimento (Concentrazione)
+    gamma: float = 3.0,  # Peso per il clipping alle estremità (Zone 0 e X)
+    tau_ext: float = 0.015,  # Soglia max tollerata per Zone 0 e X (1.5%)
+) -> float:
+    """
+    Calcola la penalità basata sul Sistema Zonale di Ansel Adams (11 Zone).
+    L'immagine di input 'img' deve avere valori in intervallo [0.0, 1.0].
+    Ritorna un valore float >= 0 che rappresenta la penalità da SOTTRARRE alla fitness.
+    """
+    # 1. Calcolo dell'istogramma zonale su 11 bin da 0.0 a 1.0
+    # np.histogram restituisce i conteggi; dividiamo per il numero totale di pixel
+    counts, _ = np.histogram(img, bins=11, range=(0.0, 1.0))
+    p = counts / img.size  # Istogramma zonale normalizzato (somma = 1.0)
+
+    # 2. Termine 1: Smoothness (Differenze tra zone adiacenti)
+    # Calcola le differenze prime: p[k+1] - p[k]
+    diffs = np.diff(p)
+    l_smooth = np.sum(diffs**2)
+
+    # 3. Termine 2: Concentrazione (Indice HHI per evitare che 1-2 zone dominino)
+    l_conc = np.sum(p**2)
+
+    # 4. Termine 3: Ancoraggio alle estremità (Zone 0 e Zone 10)
+    # Penalizza solo se la frazione di pixel supera tau_ext
+    p_zone_0_excess = max(0.0, p[0] - tau_ext)
+    p_zone_10_excess = max(0.0, p[10] - tau_ext)
+    l_ext = p_zone_0_excess + p_zone_10_excess
+
+    # 5. Penalità totale combinata
+    unweighted_score = l_smooth + l_conc + l_ext
+    total_penalty = 1.0 - np.exp(-unweighted_score)
+
+    return float(total_penalty)
+
+
+def image_entropy(image: np.ndarray, normalize: bool = False) -> float:
+    """Calcola l'entropia media sui 3 canali colore per una fetta di immagine."""
+    if len(image.shape) == 2:
+        image = np.expand_dims(image, axis=-1)
+
+    num_bins: int = 256
+
+    entropies: list[float] = []
+    for i in range(len(image.shape)):
+        channel = image[..., i].ravel()
+        histogram, _ = np.histogram(
+            channel,
+            bins=num_bins,
+            range=(0.0, 1.0) if channel.max() <= 1.0 else (0, 255),
+        )
+        p = histogram / histogram.sum()
+        p = p[p > 0]
+
+        entropy = -np.sum(p * np.log2(p))
+
+        if normalize:
+            # Dividiamo per log2(256) ovvero 8.0
+            entropy /= np.log2(num_bins)
+
+        entropies.append(entropy)
+    return float(np.mean(entropies))
+
+
 def compute_final_image_metrics(
     img: np.ndarray, bit_depth_str: str
 ) -> dict[str, str | float | int]:
@@ -156,7 +222,9 @@ def downsample_for_optimizer(
     return cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
 
 
-def save_to_file(img: np.ndarray, output_path: pathlib.Path, suffix: str) -> pathlib.Path:
+def save_to_file(
+    img: np.ndarray, output_path: pathlib.Path, suffix: str
+) -> pathlib.Path:
     if output_path.is_dir():
         if suffix:
             output_path = output_path.parent / f"{suffix}.tif"
@@ -222,6 +290,83 @@ def predict_film_type(film_base_rgb: tuple[float, float, float]) -> str:
         return "BW"
     else:
         return "COLOR"
+
+
+def get_hue_angle(img: np.ndarray) -> np.ndarray:
+    R, G, B = img[..., 0], img[..., 1], img[..., 2]
+
+    # Componenti cromatiche cartesiane (seno e coseno dell'angolo di Hue)
+    # alpha e beta rappresentano le coordinate nello spazio cromatico di CIELAB/HSV
+    alpha = 2.0 * R - G - B
+    beta = np.sqrt(3.0) * (G - B)
+
+    # Calcola l'angolo di Hue in radianti [-pi, pi]
+    hue_angle = np.arctan2(beta, alpha + 1e-7)
+    return hue_angle
+
+
+def compute_hue_shift(img_orig: np.ndarray, img_new: np.ndarray) -> float:
+    """
+    Calcola la penalità per lo spostamento cromatico/viraggio.
+
+    - Per immagini a COLORE: misura la distorsione della tonalità (Hue Shift).
+    - Per immagini B&N (o zone grigie): misura l'introduzione di dominanti di colore (viraggio).
+    """
+    # 1. Calcola la cromaticità (distanza dall'asse del grigio neutro R=G=B)
+    chroma_orig = np.max(img_orig, axis=-1) - np.min(img_orig, axis=-1)
+
+    # Controllo: L'immagine originale è in Bianco e Nero (o priva di colore)?
+    is_black_and_white = np.mean(chroma_orig) < 1e-3
+
+    if is_black_and_white:
+        # FOTO B&N: Penalizza qualsiasi divergenza tra i canali RGB nell'immagine finale.
+        # Se img_new ha R != G != B, significa che la curva ha introdotto una dominante di colore.
+        chroma_new = np.max(img_new, axis=-1) - np.min(img_new, axis=-1)
+        return float(np.mean(chroma_new))
+
+    hue_orig = get_hue_angle(img_orig)
+    hue_new = get_hue_angle(img_new)
+
+    angle_diff = np.abs(hue_orig - hue_new)
+    angular_distance = np.minimum(angle_diff, 2.0 * np.pi - angle_diff)
+
+    # Valuta lo shift solo sui pixel con un minimo di colore
+    valid_mask = chroma_orig > 0.05
+
+    if not np.any(valid_mask):
+        return float(np.mean(angular_distance))
+
+    return float(np.mean(angular_distance[valid_mask]))
+
+
+def apply_log_logistic_curve(
+    img: np.ndarray, x0: float, k: float, h: float
+) -> np.ndarray:
+    """Applica la curva Log-Logistica con 3 parametri direttamente su ogni canale RGB (0-1).
+
+    - x0: Punto perno/mezze tinte (0.3 - 0.6) -> determina alpha
+    - k:  Contrasto/Pendenza (1.0 - 5.0) -> determina beta
+    - h:  Controllo della spalla/luci (0.7 - 1.3) -> modula l'uscita
+    """
+    # 1. Clip di sicurezza sull'immagine e su x0 per evitare errori di calcolo
+    img_safe = np.clip(img, 1e-6, 1.0 - 1e-6)
+    x0_safe = np.clip(x0, 1e-3, 0.999)
+
+    # 2. Log-Logistica applicata direttamente all'array 3D dei canali RGB
+    # Formula esatta di Wikipedia (x^k / (x0^k + x^k)) applicata sui canali R, G, B
+    x_k = np.power(img_safe, k)
+    x0_k = np.power(x0_safe, k)
+    s_shaped = x_k / (x0_k + x_k + 1e-6)
+
+    # 3. Normalizzazione min-max su [0, 1]
+    y_min = 0.0
+    y_max = 1.0 / (x0_k + 1.0 + 1e-6)
+    normalized = (s_shaped - y_min) / (y_max - y_min + 1e-6)
+
+    # 4. Applicazione del parametro h per modulare la spalla delle luci
+    img_boosted = np.power(np.clip(normalized, 1e-6, 1.0), h)
+
+    return np.clip(img_boosted, 0.0, 1.0)
 
 
 def apply_s_curve(img: np.ndarray, x0: float, k: float, h: float) -> np.ndarray:

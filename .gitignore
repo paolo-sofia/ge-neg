@@ -221,3 +221,4 @@ tests/input_images/
 tests/output_images/
 .zed/
 db/
+nikon_coolscan/

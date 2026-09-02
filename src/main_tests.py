@@ -63,11 +63,9 @@ if __name__ == "__main__":
     args: argparse.Namespace = parser.parse_args()
     # main(args.type, args.description)
 
-    path = pathlib.Path(
-        "/home/paolo/Immagini/analog_images/bronze/nikon_coolscan/test/img_059_02.tif"
+    path = pathlib.Path("/home/paolo/git/ge-neg/scans/img_060_02.tif")
+    output_path = pathlib.Path("/home/paolo/git/ge-neg/scans/output_img_060_02.tif")
+    image_processor: ImageProcessor = ImageProcessor(
+        [], path, output_path, apply_genetic_algorithm=False
     )
-    output_path = pathlib.Path(
-        "/home/paolo/Immagini/analog_images/silver/nikon_coolscan/test/img_059_02.tif"
-    )
-    image_processor: ImageProcessor = ImageProcessor([], path, output_path)
     image_processor.run(db_path)

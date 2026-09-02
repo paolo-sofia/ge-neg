@@ -6,36 +6,42 @@ import cv2
 import numpy as np
 import tifffile
 
+
 def clean_image_for_border_detection(
     img: np.ndarray,
-    blur_kernel: tuple[int, int] = (5, 5),
+    film_type: str,
+    blur_kernel: tuple[int, int] = (9, 9),
     low_percentile: float = 1.0,
     high_percentile: float = 99.0,
     gamma: float = 1.2,
 ) -> np.ndarray:
-    img_work = img.copy()
+    img_work: np.ndarray = img.copy()
     if img_work.dtype != np.uint8:
         img_work = (np.clip(img_work, 0, 1) * 255).astype(np.uint8)
 
-    blurred = img_work
     # 1. Gaussian Blur tridimensionale (sfoca ogni canale mantenendo il colore)
-    for i in range(3):
-        blurred = cv2.GaussianBlur(blurred, blur_kernel, 0)
+    blurred = cv2.GaussianBlur(img_work, blur_kernel, 0)
 
-    img_float = (blurred / 255.0).astype(float)
+    img_float: np.ndarray = (blurred / 255.0).astype(float)
 
     # 2. Stretching del contrasto basato sui percentili globali
     # Mantiene la proporzione esatta dei canali RGB
-    p_low = np.percentile(img_float, low_percentile)
-    p_high = np.percentile(img_float, high_percentile)
+    p_low: float = float(np.percentile(img_float, low_percentile))
+    p_high: float = float(np.percentile(img_float, high_percentile))
 
     # Taglio dei picchi ed espansione lineare nell'intervallo [0, 1]
-    img_stretched = np.clip((img_float - p_low) / (p_high - p_low + 1e-7), 0, 1)
+    img_stretched: np.ndarray = np.clip(
+        (img_float - p_low) / (p_high - p_low + 1e-7), 0, 1
+    )
 
     # 3. Correzione Gamma per scurire/definire i toni scuri senza sbiancare la maschera
     # Un valore gamma > 1.0 (es. 1.2 o 1.5) scurisce le ombre mantenendo la saturazione
-    img_enhanced = np.power(img_stretched, gamma)
-    return img_enhanced
+    img_enhanced: np.ndarray = np.power(img_stretched, gamma)
+
+    if film_type == "BW":
+        return cv2.cvtColor(img_enhanced, cv2.COLOR_RGB2GRAY)
+    return img_enhanced[..., 0]
+
 
 def zonal_system_fitness_penalty(
     img: np.ndarray,
@@ -290,27 +296,25 @@ def save_to_file(
     return output_path
 
 
-def predict_film_type(film_base_rgb: tuple[float, float, float]) -> str:
+def predict_film_type(img: np.ndarray) -> str:
     """Predice se il rullino è Bianco e Nero ("BW") o a Colori ("COLOR")
 
     basandosi sul colore RGB della base della pellicola.
     """
     # 1. Normalizzazione a uint8 per OpenCV (0-255)
-    r, g, b = film_base_rgb
 
     # Se i valori sono in range [0, 1]
-    if max(r, g, b) <= 1.0:
-        r, g, b = r * 255.0, g * 255.0, b * 255.0
+    if img.max() <= 1.0:
+        img_u8 = (img * 255).astype(np.uint8)
     # Se i valori sono a 16-bit [0, 65535]
-    elif max(r, g, b) > 255.0:
-        r, g, b = r / 257.0, g / 257.0, b / 257.0
-
-    # Creiamo un piccolo pixel 1x1 in BGR per OpenCV
-    pixel_bgr = np.uint8([[[int(b), int(g), int(r)]]])
+    elif img.dtype == np.uint16:
+        img_u8 = (img / 255).astype(np.uint8)
+    else:
+        img_u8 = img
 
     # Conversione in HSV (In OpenCV: H in [0, 180], S in [0, 255], V in [0, 255])
-    pixel_hsv = cv2.cvtColor(pixel_bgr, cv2.COLOR_BGR2HSV)[0][0]
-    hue, saturation, value = pixel_hsv[0], pixel_hsv[1], pixel_hsv[2]
+    pixel_hsv = cv2.cvtColor(img_u8, cv2.COLOR_RGB2HSV)[0][0]
+    _, saturation, _ = pixel_hsv[0], pixel_hsv[1], pixel_hsv[2]
 
     # 2. Soglia sulla Saturazione
     # Una base B&W ha pochissima saturazione (solitamente S < 20-25 su 255)

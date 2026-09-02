@@ -35,10 +35,12 @@ class ImageProcessor:
         processed_hashes: list[str],
         image_path: pathlib.Path,
         output_path: pathlib.Path,
+        apply_genetic_algorithm: bool = True,
     ) -> None:
         self.processed_hashes: list[str] = processed_hashes
         self.image_path: pathlib.Path = image_path
         self.output_path: pathlib.Path = output_path
+        self.apply_genetic_algorithm: bool = apply_genetic_algorithm
         self.output_filename: str = ""
         self.processed_image: np.ndarray = np.empty(shape=(0, 0))
         self.execution_time_ms: float = -1
@@ -185,21 +187,21 @@ class ImageProcessor:
         if debug:
             _ = save_to_file(trimmed_image, self.output_path, "scanner_crop")
 
+        print("[MODULO 0] - Predicting film type")
+        self.film_type = predict_film_type(trimmed_image)
         print("[MODULO 0] - Compensazione dell'esposizione con ETTR")
         ettr = expose_to_the_right(trimmed_image)
         if debug:
             _ = save_to_file(ettr, self.output_path, "exposure_compensation")
 
         print("[MODULO 1] - Identify borders and compute film base")
-        border_identifier = BorderIdentifier(img=ettr)
+        border_identifier = BorderIdentifier(img=ettr, film_type=self.film_type)
         border_identifier.find_borders()
         photo_pixels = border_identifier.get_image()
         film_base = border_identifier.get_film_base()
         self.film_base = tuple(film_base.tolist())
         self.borders = border_identifier.get_image_coordinates()
         print(f"[MODULE 1] - Film base is: {self.film_base}")
-        print("[MODULE 1] - Predicting film type")
-        self.film_type = predict_film_type(self.film_base)
 
         if debug:
             _ = save_to_file(photo_pixels, self.output_path, "tagliata")
@@ -221,20 +223,44 @@ class ImageProcessor:
         if debug:
             _ = save_to_file(img_scene_wb, self.output_path, "wb_scena")
 
+        if not self.apply_genetic_algorithm:
+            self.processed_image = img_scene_wb
+            output_path: pathlib.Path = save_to_file(
+                self.processed_image,
+                self.output_path,
+                self.image_path.stem if debug else "",
+            )
+
+            self.output_filename = output_path.name
+
+            self.processed_image_features = compute_final_image_metrics(
+                self.processed_image, self.bit_depth
+            )
+
+            self.processing_status = "SUCCESS"
+
+            return
+
         print("[MODULO 4] - Contrast booster")
         contrast_booster = ContrastBoosterGenetic(img_scene_wb, seed=self.seed)
         contrast_booster.run()
         solution = contrast_booster.genetic_optimizer.best_solution()[0]
 
         # denormalize values
-        x0 = contrast_booster.bounds[0][0] + solution[0] * (
-            contrast_booster.bounds[0][1] - contrast_booster.bounds[0][0]
+        x0 = float(
+            contrast_booster.bounds[0][0]
+            + solution[0]
+            * (contrast_booster.bounds[0][1] - contrast_booster.bounds[0][0])
         )
-        k = contrast_booster.bounds[1][0] + solution[1] * (
-            contrast_booster.bounds[1][1] - contrast_booster.bounds[1][0]
+        k = float(
+            contrast_booster.bounds[1][0]
+            + solution[1]
+            * (contrast_booster.bounds[1][1] - contrast_booster.bounds[1][0])
         )
-        h = contrast_booster.bounds[2][0] + solution[2] * (
-            contrast_booster.bounds[2][1] - contrast_booster.bounds[2][0]
+        h = float(
+            contrast_booster.bounds[2][0]
+            + solution[2]
+            * (contrast_booster.bounds[2][1] - contrast_booster.bounds[2][0])
         )
 
         self.contrast_booster_solution = (x0, k, h)

@@ -6,6 +6,36 @@ import cv2
 import numpy as np
 import tifffile
 
+def clean_image_for_border_detection(
+    img: np.ndarray,
+    blur_kernel: tuple[int, int] = (5, 5),
+    low_percentile: float = 1.0,
+    high_percentile: float = 99.0,
+    gamma: float = 1.2,
+) -> np.ndarray:
+    img_work = img.copy()
+    if img_work.dtype != np.uint8:
+        img_work = (np.clip(img_work, 0, 1) * 255).astype(np.uint8)
+
+    blurred = img_work
+    # 1. Gaussian Blur tridimensionale (sfoca ogni canale mantenendo il colore)
+    for i in range(3):
+        blurred = cv2.GaussianBlur(blurred, blur_kernel, 0)
+
+    img_float = (blurred / 255.0).astype(float)
+
+    # 2. Stretching del contrasto basato sui percentili globali
+    # Mantiene la proporzione esatta dei canali RGB
+    p_low = np.percentile(img_float, low_percentile)
+    p_high = np.percentile(img_float, high_percentile)
+
+    # Taglio dei picchi ed espansione lineare nell'intervallo [0, 1]
+    img_stretched = np.clip((img_float - p_low) / (p_high - p_low + 1e-7), 0, 1)
+
+    # 3. Correzione Gamma per scurire/definire i toni scuri senza sbiancare la maschera
+    # Un valore gamma > 1.0 (es. 1.2 o 1.5) scurisce le ombre mantenendo la saturazione
+    img_enhanced = np.power(img_stretched, gamma)
+    return img_enhanced
 
 def zonal_system_fitness_penalty(
     img: np.ndarray,

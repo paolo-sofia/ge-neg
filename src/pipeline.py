@@ -197,7 +197,7 @@ class ImageProcessor:
         film_base = border_identifier.get_film_base()
         self.film_base = tuple(film_base.tolist())
         self.borders = border_identifier.get_image_coordinates()
-
+        print(f"[MODULE 1] - Film base is: {self.film_base}")
         print("[MODULE 1] - Predicting film type")
         self.film_type = predict_film_type(self.film_base)
 

@@ -1,6 +1,7 @@
+import cv2
 import numpy as np
 
-from src.ge_neg.utils import image_entropy
+from src.ge_neg.utils import clean_image_for_border_detection, image_entropy
 
 
 class DynamicEdgeDetector:
@@ -86,11 +87,12 @@ class BorderIdentifier:
     def __init__(
         self,
         img: np.ndarray[tuple[int, int, int], np.dtype[np.uint8 | np.float32]],
-        step_size: float = 0.005,
+        step_size: float = 0.002,
         delta_entropy_threshold: float = 3.5,
         max_plateau_iterations: int = 15,
     ) -> None:
         self.img: np.ndarray = img
+        self.cleaned_image: np.ndarray = clean_image_for_border_detection(img)
         self.image_shape: tuple[int, int, int] = img.shape
         self.step_size: float = step_size
         self.delta_entropy_threshold: float = delta_entropy_threshold
@@ -105,6 +107,16 @@ class BorderIdentifier:
             "top": 0,
             "bottom": self.image_shape[0],
         }
+
+    def _find_scanner_frame_border(self, direction: str):
+        direction = direction.lower().strip()
+        if direction != "left" and direction != "right":
+            print(
+                f"Wrong direction passed as input. pass one of these values as parameters: 'left', 'right'. Value passed to function is : {direction}"
+            )
+            return
+
+        
 
     def _find_border(self, direction: str) -> None:
         direction = direction.lower().strip()
@@ -132,36 +144,38 @@ class BorderIdentifier:
         edge_detector = DynamicEdgeDetector()  # verbose=direction == "bottom"
 
         image: np.ndarray
-        limit_perc: float = 0.15
+        limit_perc_width: float = 0.066  # film is 36mm, vuescan scans 38mm. so let's scan the first 2.5mm of the image, which is around 6.6%
+        limit_perc_height: float = 0.035  # nikon coolscan has a black border of around 91 pixel per side. total scan is 2869 pixel, ~3.5% of the image
+
         limit: int
         while True:
             if direction == "left":
                 new_direction_value = self.borders[direction] + (self.step_x * i)
-                limit = int(self.image_shape[1] * limit_perc)
+                limit = int(self.image_shape[1] * limit_perc_height)
 
                 is_last_iteration = new_direction_value >= limit
                 new_direction_value = min(new_direction_value, limit)
 
-                image = self.img[
+                image = self.cleaned_image[
                     self.borders["top"] : self.borders["bottom"],
                     old_direction_value:new_direction_value,
                     :,
                 ]
             elif direction == "right":
                 new_direction_value = self.borders[direction] - (self.step_x * i)
-                limit = int(self.image_shape[1] * (1 - limit_perc))
+                limit = int(self.image_shape[1] * (1 - limit_perc_height))
 
                 is_last_iteration = new_direction_value <= limit
                 new_direction_value = max(new_direction_value, limit)
 
-                image = self.img[
+                image = self.cleaned_image[
                     self.borders["top"] : self.borders["bottom"],
                     new_direction_value:old_direction_value,
                     :,
                 ]
             elif direction == "top":
                 new_direction_value = self.borders[direction] + (self.step_y * i)
-                limit = int(self.image_shape[0] * limit_perc)
+                limit = int(self.image_shape[0] * limit_perc_width)
 
                 is_last_iteration = new_direction_value >= limit
                 new_direction_value = min(new_direction_value, limit)
@@ -172,7 +186,7 @@ class BorderIdentifier:
                 ):
                     return
 
-                image = self.img[
+                image = self.cleaned_image[
                     old_direction_value:new_direction_value,
                     self.borders["left"] : self.borders["right"],
                     :,
@@ -180,12 +194,12 @@ class BorderIdentifier:
             elif direction == "bottom":
                 new_direction_value = self.borders[direction] - (self.step_y * i)
 
-                limit = int(self.image_shape[0] * (1 - limit_perc))
+                limit = int(self.image_shape[0] * (1 - limit_perc_width))
 
                 is_last_iteration = new_direction_value <= limit
                 new_direction_value = max(new_direction_value, limit)
 
-                image = self.img[
+                image = self.cleaned_image[
                     new_direction_value:old_direction_value,
                     self.borders["left"] : self.borders["right"],
                     :,
@@ -193,7 +207,9 @@ class BorderIdentifier:
 
             entropy: float = image_entropy(image)
             if edge_detector.process_slice(entropy):
-                self.borders[direction] = new_direction_value
+                self.borders[direction] = (
+                    new_direction_value + (self.step_x * i)
+                )  # safe addition, we might crop a tiny part of the image, but at least we don't have borders
                 return
 
             if is_last_iteration:
@@ -212,14 +228,6 @@ class BorderIdentifier:
         self._find_border(direction="bottom")
         print("[MODULO 1] - All borders found")
 
-    def _get_borders_array(self) -> np.ndarray:
-        crop_mask = np.zeros(shape=self.img.shape, dtype=bool)
-        crop_mask[
-            self.borders["top"] : self.borders["bottom"],
-            self.borders["left"] : self.borders["right"],
-        ] = True
-        return self.img[~crop_mask].reshape(-1, 3)
-
     def get_image_coordinates(self) -> tuple[int, int, int, int]:
         return (
             self.borders["top"],
@@ -229,7 +237,21 @@ class BorderIdentifier:
         )
 
     def get_film_base(self) -> np.ndarray:
-        return np.median(self._get_borders_array(), axis=0)
+        crop_mask = np.zeros(shape=self.img.shape, dtype=bool)
+        crop_mask[
+            self.borders["top"] : self.borders["bottom"],
+            self.borders["left"] : self.borders["right"],
+        ] = True
+        crop_mask[
+            :,
+            : self.borders["left"],
+        ] = False  # we remove the side border which is pure black
+        crop_mask[
+            :,
+            self.borders["right"] :,
+        ] = False
+        borders_array = self.img[~crop_mask].reshape(-1, 3)
+        return np.median(borders_array, axis=0)
 
     def get_image(self) -> np.ndarray:
         return self.img[

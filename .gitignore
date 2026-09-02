@@ -217,6 +217,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-tests/
+tests/input_images/
+tests/output_images/
 .zed/
 db/

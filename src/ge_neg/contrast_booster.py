@@ -6,9 +6,9 @@ import pygad
 
 from src.ge_neg.utils import (
     apply_log_logistic_curve,
-    apply_s_curve,
     compute_hue_shift,
     downsample_for_optimizer,
+    fitness_function_components,
     image_entropy,
     zonal_system_fitness_penalty,
 )
@@ -19,6 +19,7 @@ class ContrastBoosterGenetic:
         self,
         img: np.ndarray,
         seed: int,
+        film_type: str,
         alpha: float = 3,
         population_size: int = 50,
         num_generations: int = 50,
@@ -26,7 +27,8 @@ class ContrastBoosterGenetic:
         mutation_rate: float = 0.33,
     ) -> None:
         self.img: np.ndarray = downsample_for_optimizer(img)
-        self.seed = seed
+        self.seed: int = seed
+        self.film_type: str = film_type
         self.alpha: float = alpha
         self.bounds: list[list[float]] = [
             [0.25, 0.65],  # x0
@@ -122,66 +124,14 @@ class ContrastBoosterGenetic:
         # image = apply_s_curve(self.img, x0, k, h)
         image = apply_log_logistic_curve(self.img, x0, k, h)
 
-        # 1. Target di contrasto a 0.21 (Premia la vicinanza a 0.21 con la radice)
-        sigma = np.std(image)
-        sigma_score = np.exp(-15 * abs(sigma - 0.21))
-
-        target_median = 0.48
-        current_median = np.median(image)
-        # Scala esponenziale: cresce velocemente se ci si allontana da 0.46
-        median_score = np.exp(-15 * abs(current_median - target_median))
-
-        # Parametro di severità per la crescita esponenziale delle penalità
-        # Più è alto, più la barriera contro il clipping è rigida e precoce
-        k_penalty = 3.0
-
-        # 2. Penalità Ombre
-        shadows_threshold: float = 0.05
-        orig_shadows = np.mean(self.img < shadows_threshold)
-        new_shadows = np.mean(image < shadows_threshold)
-        shadow_diff = new_shadows - orig_shadows
-        shadow_penalty = np.exp(k_penalty * max(0, shadow_diff)) - 1
-
-        # 3. Penalità Luci
-        highlight_threshold: float = 0.98
-        orig_highlights = np.mean(self.img > highlight_threshold)
-        new_highlights = np.mean(image > highlight_threshold)
-        highlight_diff = new_highlights - orig_highlights
-        highlight_penalty = np.exp(k_penalty * max(0, highlight_diff)) - 1
-
-        # pentaly on loss of information
-        original_entropy = image_entropy(self.img, normalize=True)
-        new_entropy = image_entropy(image, normalize=True)
-        entropy_diff: float = (
-            original_entropy - new_entropy
-        )  # if new entropy is higher, then it's a bonus, not a penalty
-        entropy_penalty = np.exp(k_penalty * max(0, entropy_diff)) - 1
-
-        zonal_system_penalty = zonal_system_fitness_penalty(
-            image, alpha=1.0, beta=1.2, gamma=2.5
+        fitness_score_components: dict[str, float] = fitness_function_components(
+            self.img, image, self.film_type
         )
 
-        hue_shift_penalty = compute_hue_shift(self.img, image)
+        fitness_score: float = fitness_score_components.get("fitness_score", 1)
 
-        # Fitness finale
-        fitness_value: float = float(
-            sigma_score
-            + median_score
-            - shadow_penalty
-            - highlight_penalty
-            - entropy_penalty
-            - zonal_system_penalty
-            - hue_shift_penalty
-        )
-        if fitness_value > 1.4:
-            print("=" * 100)
+        if fitness_score > 1.4:
             print(f"solution: {np.round([x0, k, h], 3)}")
-            print(
-                f"median: {np.round(current_median, 3)} - std dev: {np.round(sigma, 3)} - entropy: {np.round(new_entropy, 3)}"
-            )
-            print(
-                f"fitness_value: {np.round(fitness_value, 3)} = {np.round(sigma_score, 3)} + {np.round(median_score, 3)} - ({np.round(shadow_penalty, 3)}) - ({np.round(highlight_penalty, 3)}) - ({np.round(entropy_penalty, 3)}) - ({np.round(zonal_system_penalty, 3)}) - ({np.round(hue_shift_penalty, 3)})"
-            )
             print("=" * 100)
 
-        return float(fitness_value)
+        return fitness_score

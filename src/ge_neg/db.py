@@ -67,11 +67,33 @@ def init_db(db_path: str | pathlib.Path):
                 film_base_green REAL,
                 film_base_blue REAL,
 
+                pre_median_r REAL,
+                pre_median_g REAL,
+                pre_median_b REAL,
+
+                final_mean_r REAL,
+                final_mean_g REAL,
+                final_mean_b REAL,
+                final_median_r REAL,
+                final_median_g REAL,
+                final_median_b REAL,
+
                 -- Parametri Algoritmo Genetico & Fitness
+                ga_generations_run INTEGER,
+                best_fitness_generation INTEGER,
+                random_seed INTEGER,
                 x0 REAL NOT NULL,
                 k REAL NOT NULL,
                 h REAL NOT NULL,
+
                 fitness_score REAL,
+                fitness_sigma_score REAL,
+                fitness_median_score REAL,
+                fitness_shadow_penalty REAL,
+                fitness_highlight_penalty REAL,
+                fitness_entropy_penalty REAL,
+                fitness_zonal_system_penalty REAL,
+                fitness_hue_shift_penalty REAL,
 
                 -- Image features
                 film_type TEXT,
@@ -86,12 +108,8 @@ def init_db(db_path: str | pathlib.Path):
                 clipped_shadows_pct REAL,
                 clipped_highlights_pct REAL,
                 sharpness_score REAL,
-                final_mean_r REAL,
-                final_mean_g REAL,
-                final_mean_b REAL,
                 temperature_score REAL,
                 temperature_label TEXT,
-                random_seed INTEGER,
 
                 PRIMARY KEY (pixel_hash, processed_at),
                 FOREIGN KEY (pixel_hash) REFERENCES image_info (pixel_hash) ON DELETE CASCADE
@@ -165,8 +183,103 @@ def insert_process_run(
     cr_box: tuple[int, int, int, int] = process_data.get("borders", (-1, -1, -1, -1))
     fb_rgb = process_data.get("film_base", (-1, -1, -1))
 
+    x0, k, h = process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))
+
+    values: tuple = (
+        pixel_hash,
+        process_data.get("processing_status", "UNKNOWN"),
+        process_data.get("error_message", ""),
+        str(process_data.get("output_path")),
+        str(process_data.get("output_filename", "")),
+        int(process_data["execution_time_ms"]),
+        sc_box[0],
+        sc_box[1],
+        sc_box[2],
+        sc_box[3],
+        cr_box[0],
+        cr_box[1],
+        cr_box[2],
+        cr_box[3],
+        fb_rgb[0],
+        fb_rgb[1],
+        fb_rgb[2],
+        process_data.get("processed_image_features", {}).get("pre_median_r", -1.0),
+        process_data.get("processed_image_features", {}).get("pre_median_g", -1.0),
+        process_data.get("processed_image_features", {}).get("pre_median_b", -1.0),
+        process_data.get("processed_image_features", {}).get("final_mean_r", -1.0),
+        process_data.get("processed_image_features", {}).get("final_mean_g", -1.0),
+        process_data.get("processed_image_features", {}).get("final_mean_b", -1.0),
+        process_data.get("processed_image_features", {}).get("final_median_r", -1.0),
+        process_data.get("processed_image_features", {}).get("final_median_g", -1.0),
+        process_data.get("processed_image_features", {}).get("final_median_b", -1.0),
+        int(process_data.get("ga_generations_run", -1)),
+        int(process_data.get("best_fitness_generation", -1)),
+        int(process_data.get("seed", -1)),
+        float(x0),
+        float(h),
+        float(k),
+        float(process_data.get("contrast_booster_fitness", -1.0)),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_sigma_score", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_median_score", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_shadow_penalty", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_highlight_penalty", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_entropy_penalty", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_zonal_system_penalty", -1.0
+            )
+        ),
+        float(
+            process_data.get("processed_image_features", {}).get(
+                "fitness_hue_shift_penalty", -1.0
+            )
+        ),
+        process_data.get("processed_image_features", {}).get("film_type", "UNKNOWN"),
+        process_data.get("processed_image_features", {}).get("ev_shift", -1.0),
+        process_data.get("processed_image_features", {}).get("d_avg", -1.0),
+        process_data.get("processed_image_features", {}).get("d_min", -1.0),
+        process_data.get("processed_image_features", {}).get("d_max", -1.0),
+        process_data.get("processed_image_features", {}).get("dynamic_range", -1.0),
+        process_data.get("processed_image_features", {}).get("snr_db", -1.0),
+        process_data.get("processed_image_features", {}).get("brightness_mean", -1.0),
+        process_data.get("processed_image_features", {}).get("contrast_rms", -1.0),
+        process_data.get("processed_image_features", {}).get(
+            "clipped_shadows_pct", -1.0
+        ),
+        process_data.get("processed_image_features", {}).get(
+            "clipped_highlights_pct", -1.0
+        ),
+        process_data.get("processed_image_features", {}).get("sharpness_score", -1.0),
+        process_data.get("processed_image_features", {}).get("temperature_score", -1.0),
+        process_data.get("processed_image_features", {}).get(
+            "temperature_label", "UNKNOWN"
+        ),
+    )
+
+    placeholders: str = ", ".join(["?"] * len(values))
+
     _ = cursor.execute(
-        """
+        f"""
         INSERT INTO process_parameters (
             pixel_hash,
             status,
@@ -175,7 +288,16 @@ def insert_process_run(
             scanner_light_start_x, scanner_light_end_x, scanner_light_start_y, scanner_light_end_y,
             img_start_x, img_end_x, img_start_y, img_end_y,
             film_base_red, film_base_green, film_base_blue,
-            x0, k, h, fitness_score,
+
+            ga_generations_run, random_seed,
+
+            pre_median_r, pre_median_g, pre_median_b,
+            final_mean_r, final_mean_g, final_mean_b,
+            final_median_r, final_median_g, final_median_b,
+
+            x0, k, h,
+            fitness_score, fitness_sigma_score, fitness_median_score, fitness_shadow_penalty, fitness_highlight_penalty, fitness_entropy_penalty, fitness_zonal_system_penalty, fitness_hue_shift_penalty,
+
             film_type,
             ev_shift,
             d_avg,
@@ -188,70 +310,12 @@ def insert_process_run(
             clipped_shadows_pct,
             clipped_highlights_pct,
             sharpness_score,
-            final_mean_r,
-            final_mean_g,
-            final_mean_b,
             temperature_score,
-            temperature_label,
-            random_seed
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            temperature_label
+        ) VALUES ({placeholders})
         RETURNING processed_at
     """,
-        (
-            pixel_hash,
-            process_data.get("processing_status", "UNKNOWN"),
-            process_data.get("error_message", ""),
-            str(process_data.get("output_path")),
-            str(process_data.get("output_filename", "")),
-            int(process_data["execution_time_ms"]),
-            sc_box[0],
-            sc_box[1],
-            sc_box[2],
-            sc_box[3],
-            cr_box[0],
-            cr_box[1],
-            cr_box[2],
-            cr_box[3],
-            fb_rgb[0],
-            fb_rgb[1],
-            fb_rgb[2],
-            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[0]),
-            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[1]),
-            float(process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))[2]),
-            float(process_data.get("'contrast_booster_fitness'", -1.0)),
-            process_data.get("processed_image_features", {}).get(
-                "film_type", "UNKNOWN"
-            ),
-            process_data.get("processed_image_features", {}).get("ev_shift", -1.0),
-            process_data.get("processed_image_features", {}).get("d_avg", -1.0),
-            process_data.get("processed_image_features", {}).get("d_min", -1.0),
-            process_data.get("processed_image_features", {}).get("d_max", -1.0),
-            process_data.get("processed_image_features", {}).get("dynamic_range", -1.0),
-            process_data.get("processed_image_features", {}).get("snr_db", -1.0),
-            process_data.get("processed_image_features", {}).get(
-                "brightness_mean", -1.0
-            ),
-            process_data.get("processed_image_features", {}).get("contrast_rms", -1.0),
-            process_data.get("processed_image_features", {}).get(
-                "clipped_shadows_pct", -1.0
-            ),
-            process_data.get("processed_image_features", {}).get(
-                "clipped_highlights_pct", -1.0
-            ),
-            process_data.get("processed_image_features", {}).get(
-                "sharpness_score", -1.0
-            ),
-            process_data.get("processed_image_features", {}).get("final_mean_r", -1.0),
-            process_data.get("processed_image_features", {}).get("final_mean_g", -1.0),
-            process_data.get("processed_image_features", {}).get("final_mean_b", -1.0),
-            process_data.get("processed_image_features", {}).get(
-                "temperature_score", -1.0
-            ),
-            process_data.get("processed_image_features", {}).get(
-                "temperature_label", "UNKNOWN"
-            ),
-            process_data.get("seed", -1),
-        ),
+        values,
     )
 
     processed_at = cursor.fetchone()[0]

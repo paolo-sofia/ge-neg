@@ -20,8 +20,8 @@ from src.ge_neg.preprocessing import (
 )
 from src.ge_neg.utils import (
     apply_log_logistic_curve,
-    apply_s_curve,
     compute_final_image_metrics,
+    fitness_function_components,
     predict_film_type,
     save_to_file,
 )
@@ -223,55 +223,43 @@ class ImageProcessor:
         if debug:
             _ = save_to_file(img_scene_wb, self.output_path, "wb_scena")
 
-        if not self.apply_genetic_algorithm:
+        if self.apply_genetic_algorithm:
+            print("[MODULO 4] - Contrast booster")
+            contrast_booster = ContrastBoosterGenetic(
+                img_scene_wb, seed=self.seed, film_type=self.film_type
+            )
+            contrast_booster.run()
+            solution = contrast_booster.genetic_optimizer.best_solution()[0]
+
+            # denormalize values
+            x0 = float(
+                contrast_booster.bounds[0][0]
+                + solution[0]
+                * (contrast_booster.bounds[0][1] - contrast_booster.bounds[0][0])
+            )
+            k = float(
+                contrast_booster.bounds[1][0]
+                + solution[1]
+                * (contrast_booster.bounds[1][1] - contrast_booster.bounds[1][0])
+            )
+            h = float(
+                contrast_booster.bounds[2][0]
+                + solution[2]
+                * (contrast_booster.bounds[2][1] - contrast_booster.bounds[2][0])
+            )
+
+            self.contrast_booster_solution = (x0, k, h)
+            self.contrast_booster_fitness = float(
+                contrast_booster.genetic_optimizer.best_solution()[1]
+            )
+            print(
+                f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
+                ==========================================================================================================================================================="""
+            )
+            self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
+        else:
             self.processed_image = img_scene_wb
-            output_path: pathlib.Path = save_to_file(
-                self.processed_image,
-                self.output_path,
-                self.image_path.stem if debug else "",
-            )
 
-            self.output_filename = output_path.name
-
-            self.processed_image_features = compute_final_image_metrics(
-                self.processed_image, self.bit_depth
-            )
-
-            self.processing_status = "SUCCESS"
-
-            return
-
-        print("[MODULO 4] - Contrast booster")
-        contrast_booster = ContrastBoosterGenetic(img_scene_wb, seed=self.seed)
-        contrast_booster.run()
-        solution = contrast_booster.genetic_optimizer.best_solution()[0]
-
-        # denormalize values
-        x0 = float(
-            contrast_booster.bounds[0][0]
-            + solution[0]
-            * (contrast_booster.bounds[0][1] - contrast_booster.bounds[0][0])
-        )
-        k = float(
-            contrast_booster.bounds[1][0]
-            + solution[1]
-            * (contrast_booster.bounds[1][1] - contrast_booster.bounds[1][0])
-        )
-        h = float(
-            contrast_booster.bounds[2][0]
-            + solution[2]
-            * (contrast_booster.bounds[2][1] - contrast_booster.bounds[2][0])
-        )
-
-        self.contrast_booster_solution = (x0, k, h)
-        self.contrast_booster_fitness = float(
-            contrast_booster.genetic_optimizer.best_solution()[1]
-        )
-        print(
-            f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
-            ==========================================================================================================================================================="""
-        )
-        self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
         output_path: pathlib.Path = save_to_file(
             self.processed_image,
             self.output_path,
@@ -281,7 +269,17 @@ class ImageProcessor:
         self.output_filename = output_path.name
 
         self.processed_image_features = compute_final_image_metrics(
-            self.processed_image, self.bit_depth
+            img_scene_wb, self.processed_image, self.bit_depth
+        )
+
+        fitness_fn_components: dict[str, float] = fitness_function_components(
+            orig_img=img_scene_wb,
+            new_img=self.processed_image,
+            film_type=self.film_type,
+        )
+
+        self.processed_image_features = (
+            self.processed_image_features | fitness_fn_components
         )
 
         self.processing_status = "SUCCESS"

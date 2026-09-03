@@ -110,7 +110,7 @@ def image_entropy(image: np.ndarray, normalize: bool = False) -> float:
 
 
 def compute_final_image_metrics(
-    img: np.ndarray, bit_depth_str: str
+    orig_img: np.ndarray, img: np.ndarray, bit_depth_str: str
 ) -> dict[str, str | float | int]:
     """Calcola metriche fotometriche, densitometriche, SNR, analisi colore ed esposizione in EV."""
     if img is None or img.size == 0:
@@ -174,31 +174,122 @@ def compute_final_image_metrics(
     # 5. Clipping e Nitidezza
     # -------------------------------------------------------------------------
     total_pixels = float(gray.size)
-    clipped_shadows_pct = float(np.sum(gray == 0) / total_pixels * 100.0)
-    clipped_highlights_pct = float(np.sum(gray >= (max_val - 1)) / total_pixels * 100.0)
+    eps: float = 0.003
+    clipped_shadows_pct = float(np.sum(gray <= eps) / total_pixels * 100.0)
+    clipped_highlights_pct = float(np.sum(gray >= (1.0 - eps)) / total_pixels * 100.0)
 
     gray_8u = (gray_float / max_val * 255.0).astype(np.uint8) if bit_depth > 8 else gray
     sharpness_score = float(cv2.Laplacian(gray_8u, cv2.CV_64F).var())
 
+    median: np.ndarray = np.median(img, axis=(0, 1))
+    mean: np.ndarray = np.mean(img, axis=(0, 1))
+
+    orig_median: np.ndarray = np.median(orig_img, axis=(0, 1))
+
     return {
         "ev_shift": round(
-            ev_shift, 2
+            ev_shift, 3
         ),  # Scostamento in stop di luce (+1.0 = +1 EV, -0.8 = -0.8 EV)
         "d_avg": round(d_avg, 4),  # Densità media della pellicola
         "d_min": round(d_min, 4),
         "d_max": round(d_max, 4),
         "dynamic_range": round(dynamic_range, 4),
-        "snr_db": round(snr_db, 2),
-        "temperature_score": round(temperature_score, 2),
+        "snr_db": round(snr_db, 3),
+        "temperature_score": round(temperature_score, 3),
         "temperature_label": temperature_label,
-        "brightness_mean": round(signal_mean * max_val, 2),
+        "brightness_mean": round(signal_mean * max_val, 3),
         "contrast_rms": round(noise_std, 2),
         "clipped_shadows_pct": round(clipped_shadows_pct, 3),
         "clipped_highlights_pct": round(clipped_highlights_pct, 3),
-        "sharpness_score": round(sharpness_score, 2),
-        "final_mean_r": round(float(np.mean(r)), 2),
-        "final_mean_g": round(float(np.mean(g)), 2),
-        "final_mean_b": round(float(np.mean(b)), 2),
+        "sharpness_score": round(sharpness_score, 3),
+        "final_mean_r": round(float(mean[0]), 3),
+        "final_mean_g": round(float(mean[1]), 3),
+        "final_mean_b": round(float(mean[2]), 3),
+        "final_median_r": round(float(median[0]), 3),
+        "final_median_g": round(float(median[1]), 3),
+        "final_median_b": round(float(median[2]), 3),
+        "pre_median_r": round(float(orig_median[0]), 3),
+        "pre_median_g": round(float(orig_median[1]), 3),
+        "pre_median_b": round(float(orig_median[2]), 3),
+    }
+
+
+def fitness_function_components(
+    orig_img: np.ndarray,
+    new_img: np.ndarray,
+    film_type: str,
+) -> dict[str, float]:
+    """Calcola la fitness: massimizza la Deviazione Standard e penalizza il Clipping."""
+
+    # 1. Target di contrasto a 0.21 (Premia la vicinanza a 0.21 con la radice)
+    sigma = np.std(new_img)
+    sigma_score = np.exp(-15 * abs(sigma - 0.21))
+
+    target_median = 0.48
+    current_median = np.median(new_img)
+    # Scala esponenziale: cresce velocemente se ci si allontana da 0.46
+    median_score = np.exp(-15 * abs(current_median - target_median))
+
+    # Parametro di severità per la crescita esponenziale delle penalità
+    # Più è alto, più la barriera contro il clipping è rigida e precoce
+    k_penalty = 3.0
+
+    # 2. Penalità Ombre
+    shadows_threshold: float = 0.05
+    orig_shadows = np.mean(orig_img < shadows_threshold)
+    new_shadows = np.mean(new_img < shadows_threshold)
+    shadow_diff = new_shadows - orig_shadows
+    shadow_penalty = np.exp(k_penalty * max(0, shadow_diff)) - 1
+
+    # 3. Penalità Luci
+    highlight_threshold: float = 0.98
+    orig_highlights = np.mean(orig_img > highlight_threshold)
+    new_highlights = np.mean(new_img > highlight_threshold)
+    highlight_diff = new_highlights - orig_highlights
+    highlight_penalty = np.exp(k_penalty * max(0, highlight_diff)) - 1
+
+    # pentaly on loss of information
+    original_entropy = image_entropy(orig_img, normalize=True)
+    new_entropy = image_entropy(new_img, normalize=True)
+    entropy_diff: float = (
+        original_entropy - new_entropy
+    )  # if new entropy is higher, then it's a bonus, not a penalty
+    entropy_penalty = np.exp(k_penalty * max(0, entropy_diff)) - 1
+
+    zonal_system_penalty = zonal_system_fitness_penalty(
+        new_img, alpha=1.0, beta=1.2, gamma=2.5
+    )
+
+    hue_shift_penalty = compute_hue_shift(orig_img, new_img, film_type)
+
+    # Fitness finale
+    fitness_value: float = float(
+        sigma_score
+        + median_score
+        - shadow_penalty
+        - highlight_penalty
+        - entropy_penalty
+        - zonal_system_penalty
+        - hue_shift_penalty
+    )
+    if fitness_value > 1.4:
+        print("=" * 100)
+        print(
+            f"median: {np.round(current_median, 3)} - std dev: {np.round(sigma, 3)} - entropy: {np.round(new_entropy, 3)}"
+        )
+        print(
+            f"fitness_value: {np.round(fitness_value, 3)} = {np.round(sigma_score, 3)} + {np.round(median_score, 3)} - ({np.round(shadow_penalty, 3)}) - ({np.round(highlight_penalty, 3)}) - ({np.round(entropy_penalty, 3)}) - ({np.round(zonal_system_penalty, 3)}) - ({np.round(hue_shift_penalty, 3)})"
+        )
+
+    return {
+        "fitness_score": fitness_value,
+        "sigma_score": sigma_score,
+        "median_score": median_score,
+        "shadow_penalty": shadow_penalty,
+        "highlight_penalty": highlight_penalty,
+        "entropy_penalty": entropy_penalty,
+        "zonal_system_penalty": zonal_system_penalty,
+        "hue_shift_penalty": hue_shift_penalty,
     }
 
 
@@ -339,7 +430,9 @@ def get_hue_angle(img: np.ndarray) -> np.ndarray:
     return hue_angle
 
 
-def compute_hue_shift(img_orig: np.ndarray, img_new: np.ndarray) -> float:
+def compute_hue_shift(
+    img_orig: np.ndarray, img_new: np.ndarray, film_type: str
+) -> float:
     """
     Calcola la penalità per lo spostamento cromatico/viraggio.
 
@@ -350,13 +443,30 @@ def compute_hue_shift(img_orig: np.ndarray, img_new: np.ndarray) -> float:
     chroma_orig = np.max(img_orig, axis=-1) - np.min(img_orig, axis=-1)
 
     # Controllo: L'immagine originale è in Bianco e Nero (o priva di colore)?
-    is_black_and_white = np.mean(chroma_orig) < 1e-3
 
-    if is_black_and_white:
+    if film_type == "BW":
         # FOTO B&N: Penalizza qualsiasi divergenza tra i canali RGB nell'immagine finale.
         # Se img_new ha R != G != B, significa che la curva ha introdotto una dominante di colore.
-        chroma_new = np.max(img_new, axis=-1) - np.min(img_new, axis=-1)
-        return float(np.mean(chroma_new))
+        # 1. Calcolo della mediana per ciascun canale su scala [0.0, 1.0]
+        med_r: float = float(np.median(img_new[:, :, 0]))
+        med_g: float = float(np.median(img_new[:, :, 1]))
+        med_b: float = float(np.median(img_new[:, :, 2]))
+
+        # 2. Differenze a coppie tra le mediane
+        diff_rg_sq: float = (med_r - med_g) ** 2
+        diff_rb_sq: float = (med_r - med_b) ** 2
+        diff_gb_sq: float = (med_g - med_b) ** 2
+
+        # 3. Drift score normalizzato in [0.0, 1.0]
+        # Il divisore 2.0 garantisce che con la massima divergenza il valore sia 1.0
+        drift_score: float = np.sqrt((diff_rg_sq + diff_rb_sq + diff_gb_sq) / 2.0)
+
+        # 4. Muro di penalità esponenziale:
+        # Se drift_score è < 0.01 la penalità è quasi zero.
+        # Se il canale Blu scappa via rispetto agli altri, la penalità tende rapidamente a 1.0.
+        penalty: float = 1.0 - np.exp(-drift_score)
+
+        return float(penalty)
 
     hue_orig = get_hue_angle(img_orig)
     hue_new = get_hue_angle(img_new)

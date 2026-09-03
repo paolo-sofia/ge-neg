@@ -66,6 +66,6 @@ if __name__ == "__main__":
     path = pathlib.Path("/home/paolo/git/ge-neg/scans/img_060_02.tif")
     output_path = pathlib.Path("/home/paolo/git/ge-neg/scans/output_img_060_02.tif")
     image_processor: ImageProcessor = ImageProcessor(
-        [], path, output_path, apply_genetic_algorithm=False
+        [], path, output_path, apply_genetic_algorithm=True
     )
     image_processor.run(db_path)

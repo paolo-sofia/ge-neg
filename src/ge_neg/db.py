@@ -79,8 +79,8 @@ def init_db(db_path: str | pathlib.Path):
                 final_median_b REAL,
 
                 -- Parametri Algoritmo Genetico & Fitness
-                ga_generations_run INTEGER,
-                best_fitness_generation INTEGER,
+                ga_best_solution_generation INTEGER,
+                ga_generations_completed INTEGER,
                 random_seed INTEGER,
                 x0 REAL NOT NULL,
                 k REAL NOT NULL,
@@ -170,156 +170,104 @@ def get_or_create_image_info(
 
 
 def insert_process_run(
-    conn: sqlite3.Connection, pixel_hash: str, process_data: dict[str, str | int]
+    conn: sqlite3.Connection,
+    pixel_hash: str,
+    process_data: dict[str, str | int],
 ) -> tuple[str, str]:
     """Inserisce un nuovo record nello storico garantendo il rispetto dei tipi STRICT."""
-    print(f"Inserting data into process_parameters table.")
+    print("Inserting data into process_parameters table.")
     cursor = conn.cursor()
 
-    # Estrazione tuple coordinate con casting difensivo per la modalita STRICT
-    sc_box: tuple[int, int, int, int] = process_data.get(
-        "scanner_light_borders", (-1, -1, -1, -1)
-    )
-    cr_box: tuple[int, int, int, int] = process_data.get("borders", (-1, -1, -1, -1))
+    sc_box = process_data.get("scanner_light_borders", (-1, -1, -1, -1))
+    cr_box = process_data.get("borders", (-1, -1, -1, -1))
     fb_rgb = process_data.get("film_base", (-1, -1, -1))
-
     x0, k, h = process_data.get("contrast_booster_solution", (-1.0, -1.0, -1.0))
+    feat = process_data.get("processed_image_features", {})
 
-    values: tuple = (
-        pixel_hash,
-        process_data.get("processing_status", "UNKNOWN"),
-        process_data.get("error_message", ""),
-        str(process_data.get("output_path")),
-        str(process_data.get("output_filename", "")),
-        int(process_data["execution_time_ms"]),
-        sc_box[0],
-        sc_box[1],
-        sc_box[2],
-        sc_box[3],
-        cr_box[0],
-        cr_box[1],
-        cr_box[2],
-        cr_box[3],
-        fb_rgb[0],
-        fb_rgb[1],
-        fb_rgb[2],
-        process_data.get("processed_image_features", {}).get("pre_median_r", -1.0),
-        process_data.get("processed_image_features", {}).get("pre_median_g", -1.0),
-        process_data.get("processed_image_features", {}).get("pre_median_b", -1.0),
-        process_data.get("processed_image_features", {}).get("final_mean_r", -1.0),
-        process_data.get("processed_image_features", {}).get("final_mean_g", -1.0),
-        process_data.get("processed_image_features", {}).get("final_mean_b", -1.0),
-        process_data.get("processed_image_features", {}).get("final_median_r", -1.0),
-        process_data.get("processed_image_features", {}).get("final_median_g", -1.0),
-        process_data.get("processed_image_features", {}).get("final_median_b", -1.0),
-        int(process_data.get("ga_generations_run", -1)),
-        int(process_data.get("best_fitness_generation", -1)),
-        int(process_data.get("seed", -1)),
-        float(x0),
-        float(h),
-        float(k),
-        float(process_data.get("contrast_booster_fitness", -1.0)),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_sigma_score", -1.0
-            )
+    # Mappa esplicita Nome Colonna -> Valore Tipizzato
+    row_data = {
+        "pixel_hash": pixel_hash,
+        "status": process_data.get("processing_status", "UNKNOWN"),
+        "failure_reason": process_data.get("error_message", ""),
+        "output_path": str(process_data.get("output_path")),
+        "filename": str(process_data.get("output_filename", "")),
+        "execution_time_ms": int(process_data.get("execution_time_ms", 0)),
+        # Coordinate
+        "scanner_light_start_x": int(sc_box[0]),
+        "scanner_light_end_x": int(sc_box[1]),
+        "scanner_light_start_y": int(sc_box[2]),
+        "scanner_light_end_y": int(sc_box[3]),
+        "img_start_x": int(cr_box[0]),
+        "img_end_x": int(cr_box[1]),
+        "img_start_y": int(cr_box[2]),
+        "img_end_y": int(cr_box[3]),
+        # Base film
+        "film_base_red": float(fb_rgb[0]),
+        "film_base_green": float(fb_rgb[1]),
+        "film_base_blue": float(fb_rgb[2]),
+        # Parametri GA e Curva
+        "ga_best_solution_generation": int(
+            process_data.get("contrast_booster_best_solution_generation", -1)
         ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_median_score", -1.0
-            )
+        "ga_generations_completed": int(
+            process_data.get("contrast_booster_generations_completed", -1)
         ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_shadow_penalty", -1.0
-            )
+        "random_seed": int(process_data.get("seed", -1)),
+        "x0": float(x0),
+        "k": float(k),
+        "h": float(h),
+        "fitness_score": float(process_data.get("contrast_booster_fitness", -1.0)),
+        # Mediane e Medie
+        "pre_median_r": float(feat.get("pre_median_r", -1.0)),
+        "pre_median_g": float(feat.get("pre_median_g", -1.0)),
+        "pre_median_b": float(feat.get("pre_median_b", -1.0)),
+        "final_mean_r": float(feat.get("final_mean_r", -1.0)),
+        "final_mean_g": float(feat.get("final_mean_g", -1.0)),
+        "final_mean_b": float(feat.get("final_mean_b", -1.0)),
+        "final_median_r": float(feat.get("final_median_r", -1.0)),
+        "final_median_g": float(feat.get("final_median_g", -1.0)),
+        "final_median_b": float(feat.get("final_median_b", -1.0)),
+        # Scomposizione Fitness
+        "fitness_sigma_score": float(feat.get("fitness_sigma_score", -1.0)),
+        "fitness_median_score": float(feat.get("fitness_median_score", -1.0)),
+        "fitness_shadow_penalty": float(feat.get("fitness_shadow_penalty", -1.0)),
+        "fitness_highlight_penalty": float(feat.get("fitness_highlight_penalty", -1.0)),
+        "fitness_entropy_penalty": float(feat.get("fitness_entropy_penalty", -1.0)),
+        "fitness_zonal_system_penalty": float(
+            feat.get("fitness_zonal_system_penalty", -1.0)
         ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_highlight_penalty", -1.0
-            )
-        ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_entropy_penalty", -1.0
-            )
-        ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_zonal_system_penalty", -1.0
-            )
-        ),
-        float(
-            process_data.get("processed_image_features", {}).get(
-                "fitness_hue_shift_penalty", -1.0
-            )
-        ),
-        process_data.get("processed_image_features", {}).get("film_type", "UNKNOWN"),
-        process_data.get("processed_image_features", {}).get("ev_shift", -1.0),
-        process_data.get("processed_image_features", {}).get("d_avg", -1.0),
-        process_data.get("processed_image_features", {}).get("d_min", -1.0),
-        process_data.get("processed_image_features", {}).get("d_max", -1.0),
-        process_data.get("processed_image_features", {}).get("dynamic_range", -1.0),
-        process_data.get("processed_image_features", {}).get("snr_db", -1.0),
-        process_data.get("processed_image_features", {}).get("brightness_mean", -1.0),
-        process_data.get("processed_image_features", {}).get("contrast_rms", -1.0),
-        process_data.get("processed_image_features", {}).get(
-            "clipped_shadows_pct", -1.0
-        ),
-        process_data.get("processed_image_features", {}).get(
-            "clipped_highlights_pct", -1.0
-        ),
-        process_data.get("processed_image_features", {}).get("sharpness_score", -1.0),
-        process_data.get("processed_image_features", {}).get("temperature_score", -1.0),
-        process_data.get("processed_image_features", {}).get(
-            "temperature_label", "UNKNOWN"
-        ),
-    )
+        "fitness_hue_shift_penalty": float(feat.get("fitness_hue_shift_penalty", -1.0)),
+        # Metriche Immagine
+        "film_type": str(feat.get("film_type", "UNKNOWN")),
+        "ev_shift": float(feat.get("ev_shift", -1.0)),
+        "d_avg": float(feat.get("d_avg", -1.0)),
+        "d_min": float(feat.get("d_min", -1.0)),
+        "d_max": float(feat.get("d_max", -1.0)),
+        "dynamic_range": float(feat.get("dynamic_range", -1.0)),
+        "snr_db": float(feat.get("snr_db", -1.0)),
+        "brightness_mean": float(feat.get("brightness_mean", -1.0)),
+        "contrast_rms": float(feat.get("contrast_rms", -1.0)),
+        "clipped_shadows_pct": float(feat.get("clipped_shadows_pct", -1.0)),
+        "clipped_highlights_pct": float(feat.get("clipped_highlights_pct", -1.0)),
+        "sharpness_score": float(feat.get("sharpness_score", -1.0)),
+        "temperature_score": float(feat.get("temperature_score", -1.0)),
+        "temperature_label": str(feat.get("temperature_label", "UNKNOWN")),
+    }
 
-    placeholders: str = ", ".join(["?"] * len(values))
+    # Generazione dinamica della query senza possibilità di disallineamento
+    columns_str = ", ".join(row_data.keys())
+    placeholders_str = ", ".join([f":{k}" for k in row_data.keys()])
 
-    _ = cursor.execute(
-        f"""
-        INSERT INTO process_parameters (
-            pixel_hash,
-            status,
-            failure_reason,
-            output_path, filename, execution_time_ms,
-            scanner_light_start_x, scanner_light_end_x, scanner_light_start_y, scanner_light_end_y,
-            img_start_x, img_end_x, img_start_y, img_end_y,
-            film_base_red, film_base_green, film_base_blue,
-
-            ga_generations_run, random_seed,
-
-            pre_median_r, pre_median_g, pre_median_b,
-            final_mean_r, final_mean_g, final_mean_b,
-            final_median_r, final_median_g, final_median_b,
-
-            x0, k, h,
-            fitness_score, fitness_sigma_score, fitness_median_score, fitness_shadow_penalty, fitness_highlight_penalty, fitness_entropy_penalty, fitness_zonal_system_penalty, fitness_hue_shift_penalty,
-
-            film_type,
-            ev_shift,
-            d_avg,
-            d_min,
-            d_max,
-            dynamic_range,
-            snr_db,
-            brightness_mean,
-            contrast_rms,
-            clipped_shadows_pct,
-            clipped_highlights_pct,
-            sharpness_score,
-            temperature_score,
-            temperature_label
-        ) VALUES ({placeholders})
+    query = f"""
+        INSERT INTO process_parameters ({columns_str})
+        VALUES ({placeholders_str})
         RETURNING processed_at
-    """,
-        values,
-    )
+    """
 
+    cursor.execute(query, row_data)
     processed_at = cursor.fetchone()[0]
     conn.commit()
+
     return pixel_hash, processed_at
 
 

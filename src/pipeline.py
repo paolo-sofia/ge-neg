@@ -65,6 +65,8 @@ class ImageProcessor:
         self.film_base: tuple[float, float, float] = (-1.0, -1.0, -1.0)
         self.contrast_booster_solution: tuple[float, float, float] = (-1.0, -1.0, -1.0)
         self.contrast_booster_fitness: float = -1.0
+        self.contrast_booster_generations_completed: int = -1
+        self.contrast_booster_best_solution_generation: int = -1
         self.processed_image_features: dict[str, str | int | float] = {}
         self.film_type: str = ""
 
@@ -256,6 +258,9 @@ class ImageProcessor:
                 f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
                 ==========================================================================================================================================================="""
             )
+            self.contrast_booster_generations_completed: int = contrast_booster.genetic_optimizer.generations_completed
+            self.contrast_booster_best_solution_generation: int = contrast_booster.genetic_optimizer.best_solution_generation
+            
             self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
         else:
             self.processed_image = img_scene_wb

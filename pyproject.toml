@@ -1,0 +1,13 @@
+[project]
+name = "ge-neg"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "imagecodecs>=2026.8.16",
+    "numpy>=2.5.2",
+    "opencv-python>=5.0.0.93",
+    "pygad>=3.7.0",
+    "tifffile>=2026.8.23",
+    "torch>=2.14.0",
+    "watchdog>=6.0.0",
+]

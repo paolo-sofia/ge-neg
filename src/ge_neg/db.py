@@ -228,17 +228,17 @@ def insert_process_run(
         "final_median_g": float(feat.get("final_median_g", -1.0)),
         "final_median_b": float(feat.get("final_median_b", -1.0)),
         # Scomposizione Fitness
-        "fitness_sigma_score": float(feat.get("fitness_sigma_score", -1.0)),
-        "fitness_median_score": float(feat.get("fitness_median_score", -1.0)),
-        "fitness_shadow_penalty": float(feat.get("fitness_shadow_penalty", -1.0)),
-        "fitness_highlight_penalty": float(feat.get("fitness_highlight_penalty", -1.0)),
-        "fitness_entropy_penalty": float(feat.get("fitness_entropy_penalty", -1.0)),
+        "fitness_sigma_score": float(feat.get("sigma_score", -1.0)),
+        "fitness_median_score": float(feat.get("median_score", -1.0)),
+        "fitness_shadow_penalty": float(feat.get("shadow_penalty", -1.0)),
+        "fitness_highlight_penalty": float(feat.get("highlight_penalty", -1.0)),
+        "fitness_entropy_penalty": float(feat.get("entropy_penalty", -1.0)),
         "fitness_zonal_system_penalty": float(
-            feat.get("fitness_zonal_system_penalty", -1.0)
+            feat.get("zonal_system_penalty", -1.0)
         ),
-        "fitness_hue_shift_penalty": float(feat.get("fitness_hue_shift_penalty", -1.0)),
+        "fitness_hue_shift_penalty": float(feat.get("hue_shift_penalty", -1.0)),
         # Metriche Immagine
-        "film_type": str(feat.get("film_type", "UNKNOWN")),
+        "film_type": str(process_data.get("film_type", "UNKNOWN")),
         "ev_shift": float(feat.get("ev_shift", -1.0)),
         "d_avg": float(feat.get("d_avg", -1.0)),
         "d_min": float(feat.get("d_min", -1.0)),

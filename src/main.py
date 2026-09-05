@@ -1,21 +1,19 @@
 import argparse
 import pathlib
-from threading import ExceptHookArgs
 from time import time
 
-from pipeline import process_image
-
-VALID_EXTENSIONS = [".tiff", ".tif"]
+from src.ge_neg.config_loader import db_path, valid_extensions
+from src.pipeline import ImageProcessor
 
 
 def find_missing_images(
     input_path: pathlib.Path, output_path: pathlib.Path
 ) -> list[str]:
     input_images: list[str] = [
-        x.name for x in input_path.rglob("**") if x.suffix in VALID_EXTENSIONS
+        x.name for x in input_path.rglob("**") if x.suffix in valid_extensions
     ]
     output_images: list[str] = [
-        x.name for x in output_path.rglob("**") if x.suffix in VALID_EXTENSIONS
+        x.name for x in output_path.rglob("**") if x.suffix in valid_extensions
     ]
 
     return sorted(list(set(input_images).difference(output_images)))
@@ -33,7 +31,13 @@ def main(
         output_folder.mkdir(parents=True, exist_ok=True)
 
         start_time = time()
-        _ = process_image(input_path, output_path)
+        image_processor: ImageProcessor = ImageProcessor(
+            processed_hashes=[],
+            image_path=input_path,
+            output_path=output_path,
+            apply_genetic_algorithm=True,
+        )
+        image_processor.run(db_path=db_path)
         elapsed = time() - start_time
         print(
             f"Image {input_path.stem} processed in {int(elapsed // 60)}:{int(elapsed % 60)} minutes"

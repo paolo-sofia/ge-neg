@@ -1,6 +1,6 @@
 import os
+from time import perf_counter
 
-import cv2
 import numpy as np
 import pygad
 
@@ -12,6 +12,7 @@ from src.ge_neg.utils import (
     image_entropy,
     zonal_system_fitness_penalty,
 )
+from src.ge_neg.utils_pytorch import PyTorchGeneticEvaluator
 
 
 class ContrastBoosterGenetic:
@@ -21,9 +22,9 @@ class ContrastBoosterGenetic:
         seed: int,
         film_type: str,
         alpha: float = 3,
-        population_size: int = 50,
+        population_size: int = 30,
         num_generations: int = 50,
-        num_parents_mating: int = 15,
+        num_parents_mating: int = 8,
         mutation_rate: float = 0.33,
     ) -> None:
         self.img: np.ndarray = downsample_for_optimizer(img)
@@ -45,8 +46,17 @@ class ContrastBoosterGenetic:
         self.num_generations: int = num_generations
         self.num_parents_mating: int = num_parents_mating
         self.mutation_rate: float = mutation_rate
+        self.evaluator: PyTorchGeneticEvaluator = self._init_evaluator()
         self.genetic_optimizer: pygad.GA = self._initialize_genetic_optimizer()
         self.fitness_values: list[float] = []
+
+    def _init_evaluator(self) -> PyTorchGeneticEvaluator:
+        return PyTorchGeneticEvaluator(
+            img_np=self.img,
+            bounds=self.normalized_bounds,
+            film_type="color",
+            device="cuda",
+        )
 
     def _initialize_genetic_optimizer(self) -> pygad.GA:
         return pygad.GA(
@@ -56,15 +66,16 @@ class ContrastBoosterGenetic:
             num_genes=3,
             init_range_low=0,
             init_range_high=1,
-            fitness_func=self.fitness_func,
+            fitness_batch_size=self.population_size,
+            fitness_func=self.evaluator.fitness_batch,
             gene_type=float,
             gene_space={"low": 0.0, "high": 1.0},
             allow_duplicate_genes=True,
-            on_generation=self._on_gen,
+            # on_generation=self._on_gen,
             parallel_processing=["thread", os.cpu_count()],
             stop_criteria="saturate_10",
-            # random_seed=self.seed,
-            random_seed=42,
+            random_seed=self.seed,
+            # random_seed=42,
             parent_selection_type="tournament",
             crossover_type="sbx",
             sbx_crossover_eta=40,
@@ -88,14 +99,19 @@ class ContrastBoosterGenetic:
         print("Fitness of the best solution :", ga_instance.best_solution()[1])
 
     def run(self) -> None:
-        print(f"[MODULO 4] - Inizializzazione algoritmo genetico per aumento contrasto")
+        print("[MODULO 4] - Inizializzazione algoritmo genetico per aumento contrasto")
+        self.evaluator = self._init_evaluator()
         self.genetic_optimizer = self._initialize_genetic_optimizer()
-        print(f"[MODULO 4] - Esecuzione algoritmo genetico")
+        print("[MODULO 4] - Esecuzione algoritmo genetico")
+        start: float = perf_counter()
         self.genetic_optimizer.run()
-        print(f"[MODULO 4] - Algoritmo genetico eseguito")
-        solutions = np.column_stack(
-            (self.genetic_optimizer.solutions, self.genetic_optimizer.solutions_fitness)
+        elapsed: float = perf_counter() - start
+        print(
+            f"[MODULO 4] - Algoritmo genetico eseguito in {int(elapsed // 60)}:{str(int(elapsed % 60)).rjust(2, '0')} minuti"
         )
+        # solutions = np.column_stack(
+        #     (self.genetic_optimizer.solutions, self.genetic_optimizer.solutions_fitness)
+        # )
         # print("========== ALL SOLUTIONS =========")
         # for i in range(len(solutions)):
         #     if solutions[i, -1] == self.genetic_optimizer.best_solution()[1]:

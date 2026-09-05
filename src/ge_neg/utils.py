@@ -36,7 +36,7 @@ def clean_image_for_border_detection(
 
     # 3. Correzione Gamma per scurire/definire i toni scuri senza sbiancare la maschera
     # Un valore gamma > 1.0 (es. 1.2 o 1.5) scurisce le ombre mantenendo la saturazione
-    img_enhanced: np.ndarray = np.power(img_stretched, gamma)
+    img_enhanced: np.ndarray = np.power(img_stretched, gamma).astype(np.float32)
 
     if film_type == "BW":
         return cv2.cvtColor(img_enhanced, cv2.COLOR_RGB2GRAY)

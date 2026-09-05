@@ -48,7 +48,7 @@ class ImageProcessor:
         self.processing_status: str = "TO_PROCESS"
         self.roll_number: str = ""
         self.frame_number: str = ""
-        self.seed: int = random.randint(1, 1_000_000)
+        self.seed: int = random.randint(1, 1_000_000_000)
 
         self.metadata: dict[str, Any] = {}
         self.is_linear: bool = False
@@ -98,6 +98,13 @@ class ImageProcessor:
 
         # 2. Hash dei pixel grezzi (OpenCV)
         img = cv2.imread(self.image_path, cv2.IMREAD_UNCHANGED)
+        # rotate image if needed. Process a picture that is vertical
+        if img.shape[0] < img.shape[1]:
+            print(
+                f"[MODULE 0] - Horizontal image detected, rotating to vertical for correct processing"
+            )
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
         if img is None:
             raise ValueError(f"Impossibile decodificare l'immagine: {self.image_path}")
 
@@ -184,7 +191,7 @@ class ImageProcessor:
 
         img = normalize_image(img, self.is_linear)
 
-        print(f"[MODULO 0] - Rimozione luce scanner")
+        print("[MODULO 0] - Rimozione luce scanner")
         trimmed_image = self.remove_scanner_light(img)
         if debug:
             _ = save_to_file(trimmed_image, self.output_path, "scanner_crop")
@@ -258,9 +265,13 @@ class ImageProcessor:
                 f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
                 ==========================================================================================================================================================="""
             )
-            self.contrast_booster_generations_completed: int = contrast_booster.genetic_optimizer.generations_completed
-            self.contrast_booster_best_solution_generation: int = contrast_booster.genetic_optimizer.best_solution_generation
-            
+            self.contrast_booster_generations_completed = (
+                contrast_booster.genetic_optimizer.generations_completed
+            )
+            self.contrast_booster_best_solution_generation = (
+                contrast_booster.genetic_optimizer.best_solution_generation
+            )
+
             self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
         else:
             self.processed_image = img_scene_wb

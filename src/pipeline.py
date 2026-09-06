@@ -8,6 +8,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+from torch import dtype
 
 from src.ge_neg.border_identifier import BorderIdentifier
 from src.ge_neg.contrast_booster import ContrastBoosterGenetic
@@ -262,6 +263,10 @@ class ImageProcessor:
                 contrast_booster.genetic_optimizer.best_solution()[1]
             )
             print(
+                f"""[MODULO 4] - Parametri migliori per curva di contrasto normalizzati (x0, k, h) = {solution} - Fitness = {self.contrast_booster_fitness}
+                ==========================================================================================================================================================="""
+            )
+            print(
                 f"""[MODULO 4] - Parametri migliori per curva di contrasto (x0, k, h) = {self.contrast_booster_solution} - Fitness = {self.contrast_booster_fitness}
                 ==========================================================================================================================================================="""
             )
@@ -273,6 +278,34 @@ class ImageProcessor:
             )
 
             self.processed_image = apply_log_logistic_curve(img_scene_wb, x0, k, h)
+
+            # import torch
+
+            # from src.ge_neg.utils import downsample_for_optimizer
+            # from src.ge_neg.utils_pytorch import fitness_batch
+
+            # img_np = downsample_for_optimizer(img_scene_wb)
+            # if img_scene_wb.ndim == 2:
+            #     img_np = np.expand_dims(img_scene_wb, axis=-1)
+
+            # tensor_img = torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0)
+            # tensor_img = tensor_img.to("cuda", dtype=torch.float64)
+
+            # fitness_batch(
+            #     tensor_img,
+            #     batch_size=1,
+            #     x0=torch.from_numpy(np.array([x0]))
+            #     .to("cuda", dtype=torch.float64)
+            #     .view(-1, 1, 1, 1),
+            #     h=torch.from_numpy(np.array([h]))
+            #     .to("cuda", dtype=torch.float64)
+            #     .view(-1, 1, 1, 1),
+            #     k=torch.from_numpy(np.array([k]))
+            #     .to("cuda", dtype=torch.float64)
+            #     .view(-1, 1, 1, 1),
+            #     film_type=self.film_type,
+            #     verbose=False,
+            # )
         else:
             self.processed_image = img_scene_wb
 

@@ -195,7 +195,7 @@ def find_border_index_safe(
     # --- BORDO CONFERMATO ---
     # Per non tagliare dentro l'immagine ma posizionarsi all'inizio del gradiente,
     # valutiamo se usare l'indice del picco o l'indice immediatamente precedente.
-    return max_grad_idx
+    return max_grad_idx + 1 
 
 
 def find_edge_by_gradient(
@@ -229,7 +229,7 @@ def find_edge_by_gradient(
     if max_value < min_gradient_significance:
         return None  # Nessun bordo rilevato, l'immagine occupa già tutto il margine
 
-    return max_idx
+    return max_idx + 1
 
 
 class BorderIdentifier:
@@ -316,10 +316,10 @@ class BorderIdentifier:
             self.borders[direction] = (
                 border_px if direction == "left" else self.image_shape[1] - border_px
             )
-            print(
-                f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
-            )
-            print("=" * 150)
+            # print(
+            #     f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
+            # )
+            # print("=" * 150)
             return
 
         return
@@ -354,10 +354,10 @@ class BorderIdentifier:
             self.borders[direction] = (
                 border_px if direction == "top" else self.image_shape[0] - border_px
             )
-            print(
-                f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
-            )
-            print("=" * 150)
+            # print(
+            #     f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
+            # )
+            # print("=" * 150)
             return
         return
 
@@ -418,9 +418,7 @@ class BorderIdentifier:
         ]
         import cv2
 
-        cv2.imwrite(
-            "cropped_scanner_border.png", (self.cleaned_image * 255).astype(np.uint8)
-        )
+
         self._find_film_border(direction="top", verbose=False)
         self._find_film_border(direction="bottom", verbose=False)
         print("[MODULO 1] - All borders found")

@@ -6,11 +6,8 @@ import pygad
 
 from src.ge_neg.utils import (
     apply_log_logistic_curve,
-    compute_hue_shift,
     downsample_for_optimizer,
     fitness_function_components,
-    image_entropy,
-    zonal_system_fitness_penalty,
 )
 from src.ge_neg.utils_pytorch import PyTorchGeneticEvaluator
 
@@ -53,8 +50,8 @@ class ContrastBoosterGenetic:
     def _init_evaluator(self) -> PyTorchGeneticEvaluator:
         return PyTorchGeneticEvaluator(
             img_np=self.img,
-            bounds=self.normalized_bounds,
-            film_type="color",
+            bounds=self.bounds,
+            film_type=self.film_type,
             device="cuda",
         )
 
@@ -73,7 +70,7 @@ class ContrastBoosterGenetic:
             allow_duplicate_genes=True,
             # on_generation=self._on_gen,
             parallel_processing=["thread", os.cpu_count()],
-            stop_criteria="saturate_10",
+            stop_criteria="saturate_20",
             random_seed=self.seed,
             # random_seed=42,
             parent_selection_type="tournament",
@@ -83,7 +80,8 @@ class ContrastBoosterGenetic:
             mutation_probability=self.mutation_rate,
             keep_elitism=1,
             mutation_by_replacement=False,
-            save_solutions=True,
+            save_solutions=False,
+            save_best_solutions=False,
             random_mutation_min_val=-1,
             random_mutation_max_val=1,
         )
@@ -109,6 +107,7 @@ class ContrastBoosterGenetic:
         print(
             f"[MODULO 4] - Algoritmo genetico eseguito in {int(elapsed // 60)}:{str(int(elapsed % 60)).rjust(2, '0')} minuti"
         )
+
         # solutions = np.column_stack(
         #     (self.genetic_optimizer.solutions, self.genetic_optimizer.solutions_fitness)
         # )

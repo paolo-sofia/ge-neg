@@ -42,7 +42,6 @@ def clean_image_for_border_detection(
         return cv2.cvtColor(img_enhanced, cv2.COLOR_RGB2GRAY)
     return img_enhanced[..., 0]
 
-
 def zonal_system_fitness_penalty(
     img: np.ndarray,
     alpha: float = 1.0,  # Peso per la continuità/morbidezza (Smoothness)
@@ -80,7 +79,6 @@ def zonal_system_fitness_penalty(
 
     return float(total_penalty)
 
-
 def image_entropy(image: np.ndarray, normalize: bool = False) -> float:
     """Calcola l'entropia media sui 3 canali colore per una fetta di immagine."""
     if len(image.shape) == 2:
@@ -107,7 +105,6 @@ def image_entropy(image: np.ndarray, normalize: bool = False) -> float:
 
         entropies.append(entropy)
     return float(np.mean(entropies))
-
 
 def compute_final_image_metrics(
     orig_img: np.ndarray, img: np.ndarray, bit_depth_str: str
@@ -213,7 +210,6 @@ def compute_final_image_metrics(
         "pre_median_b": round(float(orig_median[2]), 3),
     }
 
-
 def fitness_function_components(
     orig_img: np.ndarray,
     new_img: np.ndarray,
@@ -292,7 +288,6 @@ def fitness_function_components(
         "hue_shift_penalty": hue_shift_penalty,
     }
 
-
 def calculate_temperature_score(
     img: np.ndarray,
 ) -> tuple[float, str]:
@@ -329,7 +324,6 @@ def calculate_temperature_score(
 
     return round(temp_score, 4), temp_label
 
-
 def downsample_for_optimizer(
     img: np.ndarray, target_pixels: int = 1_000_000
 ) -> np.ndarray:
@@ -347,7 +341,6 @@ def downsample_for_optimizer(
 
     # INTER_AREA esegue un Average Pooling perfetto sui blocchi di pixel
     return cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_AREA)
-
 
 def save_to_file(
     img: np.ndarray, output_path: pathlib.Path, suffix: str
@@ -379,13 +372,12 @@ def save_to_file(
         output_path,
         img_16bit,
         photometric="rgb",
-        compression="zstd",  # Opzionale: riduce la dimensione del file senza perdere dati,
+        # compression="zstd",  # Opzionale: riduce la dimensione del file senza perdere dati,
         returnoffset=False,
     )
 
     print(f"Successfully saved image at path {output_path}")
     return output_path
-
 
 def predict_film_type(img: np.ndarray) -> str:
     """Predice se il rullino è Bianco e Nero ("BW") o a Colori ("COLOR")
@@ -416,7 +408,6 @@ def predict_film_type(img: np.ndarray) -> str:
     else:
         return "COLOR"
 
-
 def get_hue_angle(img: np.ndarray) -> np.ndarray:
     R, G, B = img[..., 0], img[..., 1], img[..., 2]
 
@@ -428,7 +419,6 @@ def get_hue_angle(img: np.ndarray) -> np.ndarray:
     # Calcola l'angolo di Hue in radianti [-pi, pi]
     hue_angle = np.arctan2(beta, alpha + 1e-7)
     return hue_angle
-
 
 def compute_hue_shift(
     img_orig: np.ndarray, img_new: np.ndarray, film_type: str
@@ -482,7 +472,6 @@ def compute_hue_shift(
 
     return float(np.mean(angular_distance[valid_mask]))
 
-
 def apply_log_logistic_curve(
     img: np.ndarray, x0: float, k: float, h: float
 ) -> np.ndarray:
@@ -511,7 +500,6 @@ def apply_log_logistic_curve(
     img_boosted = np.power(np.clip(normalized, 1e-6, 1.0), h)
 
     return np.clip(img_boosted, 0.0, 1.0)
-
 
 def apply_s_curve(img: np.ndarray, x0: float, k: float, h: float) -> np.ndarray:
     """Applica una curva a S parametrica nell'intervallo [0, 1].
@@ -551,7 +539,6 @@ def apply_s_curve(img: np.ndarray, x0: float, k: float, h: float) -> np.ndarray:
     img_out = np.dstack([R * scale, G * scale, B * scale])
 
     return np.clip(img_out, 0.0, 1.0)
-
 
 def get_luminance(img: np.ndarray) -> np.ndarray:
     """Restituisce la luminanza 2D indipendentemente da B&N o RGB."""

@@ -1,6 +1,15 @@
+import math
+
 import numpy as np
 
 from src.ge_neg.utils import clean_image_for_border_detection, image_entropy
+
+LS_40_MAX_WIDTH: int = 2870
+LS_40_MAX_HEIGHT: int = 4331
+
+LS_40_WIDTH_BORDER_SIZE: int = 95
+LS_40_FRAME_HEIGHT: int = 4110  # = (36 mm / 25.4 (inch) ) * 2900 dpi
+LS_40_FRAME_WIDTH: int = 2680  # (~23.5 mm / 25.4 (inch) ) * 2900 dpi
 
 
 class DynamicEdgeDetector:
@@ -101,9 +110,6 @@ class DynamicEdgeDetector:
         return False
 
 
-import math
-
-
 def analyze_slices(
     img: np.ndarray, limit_px: int, step_size_px: int, direction: str = "left"
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -195,7 +201,7 @@ def find_border_index_safe(
     # --- BORDO CONFERMATO ---
     # Per non tagliare dentro l'immagine ma posizionarsi all'inizio del gradiente,
     # valutiamo se usare l'indice del picco o l'indice immediatamente precedente.
-    return max_grad_idx + 1 
+    return max_grad_idx + 1
 
 
 def find_edge_by_gradient(
@@ -266,19 +272,25 @@ class BorderIdentifier:
         """Corrects the side borders by applying the same border size on one side, if one border is found but not the other"""
         left_border: int = self.borders.get("left", 0)
         right_border = self.borders.get("right", 0)
-        if 100 > left_border > 80 and right_border == self.image_shape[1]:
-            print(
-                "[MODULE 1] - Correcting right border. Left border found but not right"
-            )
-            self.borders["right"] = self.image_shape[1] - left_border
-        elif (
-            left_border == 0
-            and self.image_shape[1] - 80 < right_border < self.image_shape[1] - 100
-        ):
-            print(
-                "[MODULE 1] - Correcting left border. Right border found but not right"
-            )
-            self.borders["left"] = self.image_shape[1] - right_border
+        width_size: int = right_border - left_border
+
+        if width_size > LS_40_FRAME_WIDTH:
+            extra_pixels: int = (width_size - LS_40_FRAME_WIDTH) // 2
+            self.borders["left"] += extra_pixels
+            self.borders["right"] -= extra_pixels
+
+        return
+
+    def _find_scanner_frame_borders(self, verbose: bool = False) -> None:
+        width: int = self.img.shape[1]
+        if width == LS_40_MAX_WIDTH:
+            print("Full scan, removing side borders")
+            self.borders["left"] = LS_40_WIDTH_BORDER_SIZE
+            self.borders["right"] = LS_40_MAX_WIDTH - LS_40_WIDTH_BORDER_SIZE
+            return
+
+        self._find_scanner_frame_border(direction="left", verbose=verbose)
+        self._find_scanner_frame_border(direction="right", verbose=verbose)
 
     def _find_scanner_frame_border(self, direction: str, verbose: bool = False) -> None:
         direction = direction.lower().strip()
@@ -288,7 +300,6 @@ class BorderIdentifier:
             )
             return
 
-        print(f"[MODULE 1] - Finding {direction} border...")
         limit: int = round(
             self.img.shape[1] * 0.05
         )  # 3.5% is a safe number, usually the border is around 90px, 5% ~= 145px
@@ -354,12 +365,21 @@ class BorderIdentifier:
             self.borders[direction] = (
                 border_px if direction == "top" else self.image_shape[0] - border_px
             )
-            # print(
-            #     f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
-            # )
+            print(
+                f"""Bordo trovato all'indice: {border_idx}. Nuovo bordo {direction}: {self.borders[direction]}"""
+            )
             # print("=" * 150)
             return
         return
+
+    def _correct_film_border(self) -> None:
+        frame_size: int = self.borders["bottom"] - self.borders["top"]
+        if frame_size > LS_40_FRAME_HEIGHT:
+            print("Correcting film border")
+            # crop the frame to the target size by removing extra pixels on both sides
+            extra_pixels: int = (frame_size - LS_40_FRAME_HEIGHT) // 2
+            self.borders["top"] += extra_pixels
+            self.borders["bottom"] -= extra_pixels
 
     # def _find_film_border(self, direction: str, verbose: bool = False) -> None:
     #     direction = direction.lower().strip()
@@ -407,20 +427,16 @@ class BorderIdentifier:
     def find_borders(self) -> None:
         print("[MODULO 1] - Find borders")
 
-        self._find_scanner_frame_border(direction="left", verbose=False)
-        print("=" * 150)
-        self._find_scanner_frame_border(direction="right", verbose=False)
-        print("=" * 150)
+        self._find_scanner_frame_borders(verbose=False)
         self._correct_scanner_border()
         self.cleaned_image = self.cleaned_image[
             self.borders["top"] : self.borders["bottom"],
             self.borders["left"] : self.borders["right"],
         ]
-        import cv2
-
 
         self._find_film_border(direction="top", verbose=False)
         self._find_film_border(direction="bottom", verbose=False)
+        self._correct_film_border()
         print("[MODULO 1] - All borders found")
 
     def get_image_coordinates(self) -> tuple[int, int, int, int]:

@@ -64,12 +64,12 @@ if __name__ == "__main__":
     # main(args.type, args.description)
 
     path = pathlib.Path(
-        "/home/paolo/Immagini/analog_images/bronze/nikon_coolscan/film_061/img_061_13.tiff"
+        "/home/paolo/git/ge-neg/tests/input_images/bianco_nero/sottoesposta_2.tif"
     )
     output_path = pathlib.Path(
-        "/home/paolo/Immagini/analog_images/silver/nikon_coolscan/film_061/img_061_13.tiff"
+        "/home/paolo/git/ge-neg/tests/output_images/bianco_nero/sottoesposta_2.tif"
     )
     image_processor: ImageProcessor = ImageProcessor(
-        [], path, output_path, apply_genetic_algorithm=True
+        [], path, output_path, apply_genetic_algorithm=False
     )
     image_processor.run(db_path)
